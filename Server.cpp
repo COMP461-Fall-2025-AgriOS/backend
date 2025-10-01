@@ -10,6 +10,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <regex>
 
 Server::Server(int port) : port(port), running(false) {}
 
@@ -19,27 +20,27 @@ Server::~Server() {
 
 void Server::initializeHandlers() {
     registerEndpoint("POST /robots/{id}", [](const std::string& request) {
-        return "Handler for POST /robots/{id}";
+        return "Handler for POST /robots/{id}\n";
     });
 
     registerEndpoint("PATCH /robots/{id}", [](const std::string& request) {
-        return "Handler for PATCH /robots/{id}";
+        return "Handler for PATCH /robots/{id}\n";
     });
 
     registerEndpoint("GET /robots/", [](const std::string& request) {
-        return "Handler for GET /robots/";
+        return "Handler for GET /robots/\n";
     });
 
     registerEndpoint("GET /robots/{id}", [](const std::string& request) {
-        return "Handler for GET /robots/{id}";
+        return "Handler for GET /robots/{id}\n";
     });
 
     registerEndpoint("DELETE /robots/{id}", [](const std::string& request) {
-        return "Handler for DELETE /robots/{id}";
+        return "Handler for DELETE /robots/{id}\n";
     });
 
     registerEndpoint("DELETE /robots/", [](const std::string& request) {
-        return "Handler for DELETE /robots/";
+        return "Handler for DELETE /robots/\n";
     });
 }
 
@@ -108,10 +109,43 @@ void Server::run() {
 }
 
 std::string Server::handleRequest(const std::string& request) {
-    auto it = endpointHandlers.find(request);
-    if (it != endpointHandlers.end()) {
-        return it->second(request);
+    std::istringstream requestStream(request);
+    std::string method, path;
+    requestStream >> method >> path;
+
+    for (const auto& [endpoint, handler] : endpointHandlers) {
+        std::string endpointPattern = endpoint;
+        size_t pos;
+        while ((pos = endpointPattern.find("{")) != std::string::npos) {
+            size_t endPos = endpointPattern.find("}", pos);
+            if (endPos != std::string::npos) {
+                endpointPattern.replace(pos, endPos - pos + 1, "[^/]+");
+            }
+        }
+
+        // Use regex to match the path
+        std::regex pattern(endpointPattern);
+        if (std::regex_match(method + " " + path, pattern)) {
+            std::string body = handler(request);
+            std::ostringstream response;
+            response << "HTTP/1.1 200 OK\r\n";
+            response << "Content-Type: text/plain\r\n";
+            response << "Content-Length: " << body.size() << "\r\n";
+            response << "Connection: close\r\n";
+            response << "\r\n";
+            response << body;
+            return response.str();
+        }
     }
-    return "404 Not Found";
+
+    // Default to 404 if no match is found
+    std::ostringstream response;
+    response << "HTTP/1.1 404 Not Found\r\n";
+    response << "Content-Type: text/plain\r\n";
+    response << "Content-Length: 13\r\n";
+    response << "Connection: close\r\n";
+    response << "\r\n";
+    response << "404 Not Found";
+    return response.str();
 }
 
