@@ -6,9 +6,10 @@
 #include <unordered_map>
 #include <string>
 #include <stdexcept>
-#include <asio.hpp>
-
-using asio::ip::tcp;
+#include <cstring>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <unistd.h>
 
 Server::Server(int port) : port(port), running(false) {}
 
@@ -62,32 +63,48 @@ void Server::registerEndpoint(const std::string& endpoint, std::function<std::st
 }
 
 void Server::run() {
-    try {
-        asio::io_context io_context;
-        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), port));
-
-        while (running) {
-            tcp::socket socket(io_context);
-            acceptor.accept(socket);
-
-            std::array<char, 1024> buffer;
-            asio::error_code error;
-            size_t length = socket.read_some(asio::buffer(buffer), error);
-
-            if (error == asio::error::eof) {
-                break;
-            } else if (error) {
-                throw asio::system_error(error);
-            }
-
-            std::string request(buffer.data(), length);
-            std::string response = handleRequest(request);
-
-            asio::write(socket, asio::buffer(response), error);
-        }
-    } catch (std::exception& e) {
-        std::cerr << "Exception in server: " << e.what() << std::endl;
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd == -1) {
+        throw std::runtime_error("Failed to create socket");
     }
+
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = INADDR_ANY;
+    address.sin_port = htons(port);
+
+    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
+        close(server_fd);
+        throw std::runtime_error("Failed to bind socket");
+    }
+
+    if (listen(server_fd, 3) < 0) {
+        close(server_fd);
+        throw std::runtime_error("Failed to listen on socket");
+    }
+
+    while (running) {
+        sockaddr_in client_address;
+        socklen_t client_len = sizeof(client_address);
+        int client_fd = accept(server_fd, (struct sockaddr*)&client_address, &client_len);
+        if (client_fd < 0) {
+            if (running) {
+                std::cerr << "Failed to accept connection" << std::endl;
+            }
+            continue;
+        }
+
+        char buffer[1024] = {0};
+        int bytes_read = read(client_fd, buffer, sizeof(buffer));
+        if (bytes_read > 0) {
+            std::string request(buffer, bytes_read);
+            std::string response = handleRequest(request);
+            send(client_fd, response.c_str(), response.size(), 0);
+        }
+        close(client_fd);
+    }
+
+    close(server_fd);
 }
 
 std::string Server::handleRequest(const std::string& request) {

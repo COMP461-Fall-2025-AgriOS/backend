@@ -1,6 +1,6 @@
 # Compiler and flags
 CXX = g++
-CXXFLAGS = -Wall -O2
+CXXFLAGS = -I/usr/include -Wall -O2 -pthread
 
 # Main
 SRC = main.cpp Robot.cpp Server.cpp
@@ -16,9 +16,9 @@ all: $(TARGET)
 build: all
 
 $(TARGET): $(OBJ)
-	$(CXX) $(CXXFLAGS) $(OBJ) -o $(TARGET)
+	$(CXX) $(CXXFLAGS) $(OBJ) -o $(TARGET) -lstdc++fs
 
-%.o: %.c
+%.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 # Clean up build directory and executables
