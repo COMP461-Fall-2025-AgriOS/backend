@@ -1,10 +1,19 @@
 #include "Server.h"
+#include <iostream>
+#include <cstdlib>
 
-int main() {
-    Server server(8080); // Start the server on port 8080
+int main(int argc, char* argv[]) {
+    int port = 8080;
+
+    for (int i = 1; i < argc; ++i) {
+        if (std::string(argv[i]) == "--port" && i + 1 < argc) {
+            port = std::atoi(argv[i + 1]);
+        }
+    }
+
+    Server server(port);
     server.start();
 
-    // Keep the server running until manually stopped
     while (true) {
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
