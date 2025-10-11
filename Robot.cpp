@@ -336,3 +336,19 @@ Robot Robot::deserialize(const std::string& data)
     r.position = parseFloatArrayByKey(data, "position");
     return r;
 }
+
+std::vector<Robot> Robot::deserializeList(const std::string& data) {
+    std::vector<Robot> robots;
+    size_t pos = 0;
+    while ((pos = data.find('{', pos)) != std::string::npos) {
+        size_t endPos = data.find('}', pos);
+        if (endPos != std::string::npos) {
+            std::string robotData = data.substr(pos, endPos - pos + 1);
+            robots.push_back(deserialize(robotData));
+            pos = endPos + 1;
+        } else {
+            break;
+        }
+    }
+    return robots;
+}

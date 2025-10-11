@@ -40,6 +40,7 @@ struct Robot
     // Serialization JSON stuff ??
     std::string serialize() const;
     static Robot deserialize(const std::string& data);
+    static std::vector<Robot> deserializeList(const std::string& data);
 };
 
 #endif
