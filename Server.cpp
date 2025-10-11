@@ -11,6 +11,7 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <regex>
+#include <arpa/inet.h>
 
 Server::Server(int port) : port(port), running(false) {}
 
@@ -94,6 +95,10 @@ void Server::run() {
             }
             continue;
         }
+
+        std::cout << "New client accepted from "
+                  << inet_ntoa(client_address.sin_addr) << ":"
+                  << ntohs(client_address.sin_port) << std::endl;
 
         char buffer[1024] = {0};
         int bytes_read = read(client_fd, buffer, sizeof(buffer));
