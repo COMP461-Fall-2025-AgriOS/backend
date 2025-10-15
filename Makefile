@@ -1,6 +1,6 @@
 # Compiler and flags
 CXX = g++
-CXXFLAGS = -I/usr/include -Wall -O2 -pthread
+CXXFLAGS = -I/usr/include -Wall -O2 -pthread -stdlib=libc++ -std=c++17 
 
 # Main
 SRC = main.cpp Robot.cpp Server.cpp Map.cpp Logger.cpp

@@ -167,9 +167,9 @@ void Server::initializeHandlers() {
         requestStream >> method >> path;
         
     std::string body = extractBody(request);
-    if (logger) logger->log(LogLevel::Debug, std::string("Received map body: ") + body);
+    if (logger) logger->log(LogLevel::Debug, std::string("Received map body: ") + body + std::string(" Path: ") + path + std::string(" Method: ") + method);
 
-        std::regex idRegex("POST /map/([0-9]+)");
+        std::regex idRegex("POST /map/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
         std::smatch match;
         if (std::regex_search(path, match, idRegex)) {
             int id = std::stoi(match[1]);
