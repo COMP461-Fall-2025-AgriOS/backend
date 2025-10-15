@@ -253,7 +253,7 @@ void Server::initializeHandlers() {
         return std::string("Map not found\n");
     });
 
-    registerEndpoint("GET /map", [this](const std::string& request) {
+    registerEndpoint("GET /map/", [this](const std::string& request) {
         // Return all maps as JSON
         std::ostringstream response;
         response << "[";
