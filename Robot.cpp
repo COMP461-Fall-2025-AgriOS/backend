@@ -214,7 +214,7 @@ std::string Robot::serialize() const
     std::ostringstream out;
     out << '{';
     out << "\"name\":\"" << escapeString(name) << "\",";
-    out << "\"id\":" << id << ",";
+    out << "\"id\":\"" << escapeString(id) << "\",";
     out << "\"type\":\"" << escapeString(type) << "\",";
     out << "\"attributes\":\"" << escapeString(attributes) << "\",";
     out << "\"position\":[";
@@ -330,7 +330,7 @@ Robot Robot::deserialize(const std::string& data)
 {
     Robot r;
     r.name = parseStringValueByKey(data, "name");
-    r.id = parseIntValueByKey(data, "id");
+    r.id = parseStringValueByKey(data, "id");
     r.type = parseStringValueByKey(data, "type");
     r.attributes = parseStringValueByKey(data, "attributes");
     r.position = parseFloatArrayByKey(data, "position");

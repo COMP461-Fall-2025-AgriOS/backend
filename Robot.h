@@ -10,7 +10,7 @@ class Map;
 struct Robot
 {
     std::string name;
-    int id;
+    std::string id;
     // These probably need their own data types later idk
     std::string type;
     std::string attributes;

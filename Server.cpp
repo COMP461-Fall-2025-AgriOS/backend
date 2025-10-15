@@ -28,8 +28,8 @@ Server::~Server() {
 }
 
 // Add maps and robots lists
-std::unordered_map<int, Robot> robots;
-std::unordered_map<int, Map> maps;
+std::unordered_map<std::string, Robot> robots;
+std::unordered_map<std::string, Map> maps;
 
 // Helper function to extract body from HTTP request
 std::string extractBody(const std::string& request) {
@@ -51,12 +51,20 @@ std::string extractBody(const std::string& request) {
 void Server::initializeHandlers() {
     registerEndpoint("POST /robots/{id}", [this](const std::string& request) {
         // Extract robot data from request and add to storage
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
         std::string body = extractBody(request);
 
+        std::regex idRegex("/robots/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
+        std::smatch match;
         Robot newRobot = Robot::deserialize(body);
+        if (std::regex_search(path, match, idRegex)) {
+            newRobot.id = match[1];
+        }
         robots[newRobot.id] = newRobot;
 
-        if (logger) logger->log(LogLevel::Info, "Created robot id=" + std::to_string(newRobot.id));
+        if (logger) logger->log(LogLevel::Info, std::string("Created robot id=") + newRobot.id);
         return std::string("Robot created successfully\n");
     });
 
@@ -81,13 +89,14 @@ void Server::initializeHandlers() {
         
         std::string body = extractBody(request);
 
-        std::regex idRegex("PATCH /robots/([0-9]+)");
+        // ID regex: UUID format (lowercase hex)
+        std::regex idRegex("/robots/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
         std::smatch match;
         if (std::regex_search(path, match, idRegex)) {
-            int id = std::stoi(match[1]);
+            std::string id = match[1];
             if (robots.find(id) != robots.end()) {
                 robots[id] = Robot::deserialize(body);
-                if (logger) logger->log(LogLevel::Info, "Updated robot id=" + std::to_string(id));
+                if (logger) logger->log(LogLevel::Info, "Updated robot id=" + id);
                 return std::string("Robot updated successfully\n");
             }
         }
@@ -119,12 +128,12 @@ void Server::initializeHandlers() {
         std::string method, path;
         requestStream >> method >> path;
 
-        std::regex idRegex("GET /robots/([0-9]+)");
+        std::regex idRegex("/robots/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
         std::smatch match;
         if (std::regex_search(path, match, idRegex)) {
-            int id = std::stoi(match[1]);
+            std::string id = match[1];
             if (robots.find(id) != robots.end()) {
-                if (logger) logger->log(LogLevel::Info, "Fetched robot id=" + std::to_string(id));
+                if (logger) logger->log(LogLevel::Info, "Fetched robot id=" + id);
                 return std::string(robots[id].serialize());
             }
         }
@@ -139,12 +148,12 @@ void Server::initializeHandlers() {
         std::string method, path;
         requestStream >> method >> path;
 
-        std::regex idRegex("DELETE /robots/([0-9]+)");
+        std::regex idRegex("/robots/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
         std::smatch match;
         if (std::regex_search(path, match, idRegex)) {
-            int id = std::stoi(match[1]);
+            std::string id = match[1];
             if (robots.erase(id)) {
-                if (logger) logger->log(LogLevel::Info, "Deleted robot id=" + std::to_string(id));
+                if (logger) logger->log(LogLevel::Info, "Deleted robot id=" + id);
                 return std::string("Robot deleted successfully\n");
             }
         }
@@ -172,7 +181,7 @@ void Server::initializeHandlers() {
         std::regex idRegex("/map/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
         std::smatch match;
         if (std::regex_search(path, match, idRegex)) {
-            int id = std::stoi(match[1]);
+            std::string id = match[1];
             
             // Parse width and height from JSON body
             std::regex widthRegex("\"width\"\\s*:\\s*([0-9]+)");
@@ -186,7 +195,7 @@ void Server::initializeHandlers() {
                 
                 // Create and store the map
                 maps.emplace(id, Map(width, height));
-                if (logger) logger->log(LogLevel::Info, "Created map with id=" + std::to_string(id) + ", width=" + std::to_string(width) + ", height=" + std::to_string(height));
+                if (logger) logger->log(LogLevel::Info, "Created map with id=" + id + ", width=" + std::to_string(width) + ", height=" + std::to_string(height));
 
                 return std::string("Map created successfully\n");
             } else {
@@ -206,18 +215,41 @@ void Server::initializeHandlers() {
         
         std::string body = extractBody(request);
 
-        std::regex idRegex("PATCH /map/([0-9]+)");
+        std::regex idRegex("/map/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
         std::smatch match;
         if (std::regex_search(path, match, idRegex)) {
-            int id = std::stoi(match[1]);
+            std::string id = match[1];
             if (maps.find(id) != maps.end()) {
                 // TODO: Implement Map::deserialize or parse JSON body
                 // maps[id] = Map::deserialize(body);
-                if (logger) logger->log(LogLevel::Info, "Updated map id=" + std::to_string(id));
+                if (logger) logger->log(LogLevel::Info, std::string("Updated map id=") + id);
                 return std::string("Map updated successfully\n");
             }
         }
 
+        return std::string("Map not found\n");
+    });
+
+    // GET specific map
+    registerEndpoint("GET /map/{id}", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+
+        std::regex idRegex("/map/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
+        std::smatch match;
+        if (std::regex_search(path, match, idRegex)) {
+            std::string id = match[1];
+            auto it = maps.find(id);
+            if (it != maps.end()) {
+                const Map &m = it->second;
+                std::ostringstream out;
+                out << "{\"id\":\"" << id << "\",\"width\":" << m.getWidth() << ",\"height\":" << m.getHeight() << "}";
+                if (logger) logger->log(LogLevel::Info, "Fetched map id=" + id);
+                return out.str();
+            }
+        }
+        if (logger) logger->log(LogLevel::Warn, "Get map not found");
         return std::string("Map not found\n");
     });
 
@@ -247,12 +279,12 @@ void Server::initializeHandlers() {
         std::string method, path;
         requestStream >> method >> path;
 
-        std::regex idRegex("DELETE /map/([0-9]+)");
+        std::regex idRegex("/map/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
         std::smatch match;
         if (std::regex_search(path, match, idRegex)) {
-            int id = std::stoi(match[1]);
+            std::string id = match[1];
             if (maps.erase(id)) {
-                if (logger) logger->log(LogLevel::Info, "Deleted map id=" + std::to_string(id));
+                if (logger) logger->log(LogLevel::Info, std::string("Deleted map id=") + id);
                 return std::string("Map deleted successfully\n");
             }
         }
@@ -335,7 +367,15 @@ std::string Server::handleRequest(const std::string& request) {
     requestStream >> method >> path;
 
     for (const auto& [endpoint, handler] : endpointHandlers) {
-        std::string endpointPattern = endpoint;
+        // endpoint is like "GET /robots/{id}" - split method and path
+        auto spacePos = endpoint.find(' ');
+        if (spacePos == std::string::npos) continue;
+        std::string endpointMethod = endpoint.substr(0, spacePos);
+        std::string endpointPath = endpoint.substr(spacePos + 1);
+
+        if (endpointMethod != method) continue; // method must match exactly
+
+        std::string endpointPattern = endpointPath;
         size_t pos;
         while ((pos = endpointPattern.find("{")) != std::string::npos) {
             size_t endPos = endpointPattern.find("}", pos);
@@ -344,9 +384,9 @@ std::string Server::handleRequest(const std::string& request) {
             }
         }
 
-        // Use regex to match the path
+        // Use regex to match the path only (not the method)
         std::regex pattern(endpointPattern);
-        if (std::regex_match(method + " " + path, pattern)) {
+        if (std::regex_match(path, pattern)) {
             std::string body = handler(request);
             std::ostringstream response;
             response << "HTTP/1.1 200 OK\r\n";
