@@ -166,8 +166,8 @@ void Server::initializeHandlers() {
         std::string method, path;
         requestStream >> method >> path;
         
-        std::string body = extractBody(request);
-        std::cout << "Received map body: " << body << std::endl;
+    std::string body = extractBody(request);
+    if (logger) logger->log(LogLevel::Debug, std::string("Received map body: ") + body);
 
         std::regex idRegex("POST /map/([0-9]+)");
         std::smatch match;
@@ -186,11 +186,11 @@ void Server::initializeHandlers() {
                 
                 // Create and store the map
                 maps.emplace(id, Map(width, height));
-                std::cout << "Created map with id=" << id << ", width=" << width << ", height=" << height << std::endl;
-                
-                return "Map created successfully\n";
+                if (logger) logger->log(LogLevel::Info, "Created map with id=" + std::to_string(id) + ", width=" + std::to_string(width) + ", height=" + std::to_string(height));
+
+                return std::string("Map created successfully\n");
             } else {
-                return "Failed to parse map dimensions\n";
+                return std::string("Failed to parse map dimensions\n");
             }
         }
 
@@ -218,7 +218,7 @@ void Server::initializeHandlers() {
             }
         }
 
-        return "Map not found\n";
+        return std::string("Map not found\n");
     });
 
     registerEndpoint("GET /map", [this](const std::string& request) {
