@@ -31,13 +31,27 @@ Server::~Server() {
 std::unordered_map<int, Robot> robots;
 std::unordered_map<int, Map> maps;
 
+// Helper function to extract body from HTTP request
+std::string extractBody(const std::string& request) {
+    // Find the double newline that separates headers from body
+    size_t bodyStart = request.find("\r\n\r\n");
+    if (bodyStart != std::string::npos) {
+        return request.substr(bodyStart + 4);
+    }
+    
+    // Try single newline separator as fallback
+    bodyStart = request.find("\n\n");
+    if (bodyStart != std::string::npos) {
+        return request.substr(bodyStart + 2);
+    }
+    
+    return "";
+}
+
 void Server::initializeHandlers() {
     registerEndpoint("POST /robots/{id}", [this](const std::string& request) {
         // Extract robot data from request and add to storage
-        std::istringstream requestStream(request);
-        std::string method, path, body;
-        requestStream >> method >> path;
-        std::getline(requestStream, body);
+        std::string body = extractBody(request);
 
         Robot newRobot = Robot::deserialize(body);
         robots[newRobot.id] = newRobot;
@@ -48,10 +62,7 @@ void Server::initializeHandlers() {
 
     registerEndpoint("POST /robots", [this](const std::string& request) {
         // Extract robots data from request and add to storage
-        std::istringstream requestStream(request);
-        std::string method, path, body;
-        requestStream >> method >> path;
-        std::getline(requestStream, body);
+        std::string body = extractBody(request);
 
         std::vector<Robot> newRobots = Robot::deserializeList(body);
         for (const auto& robot : newRobots) {
@@ -65,9 +76,10 @@ void Server::initializeHandlers() {
     registerEndpoint("PATCH /robots/{id}", [this](const std::string& request) {
         // Extract robot ID and update its attributes
         std::istringstream requestStream(request);
-        std::string method, path, body;
+        std::string method, path;
         requestStream >> method >> path;
-        std::getline(requestStream, body);
+        
+        std::string body = extractBody(request);
 
         std::regex idRegex("PATCH /robots/([0-9]+)");
         std::smatch match;
@@ -151,17 +163,35 @@ void Server::initializeHandlers() {
     registerEndpoint("POST /map/{id}", [this](const std::string& request) {
         // Create map
         std::istringstream requestStream(request);
-        std::string method, path, body;
+        std::string method, path;
         requestStream >> method >> path;
-        std::getline(requestStream, body);
+        
+        std::string body = extractBody(request);
+        std::cout << "Received map body: " << body << std::endl;
 
         std::regex idRegex("POST /map/([0-9]+)");
         std::smatch match;
         if (std::regex_search(path, match, idRegex)) {
             int id = std::stoi(match[1]);
-            // maps[id] = Map::deserialize(body);
-            if (logger) logger->log(LogLevel::Info, "Created map id=" + std::to_string(id));
-            return std::string("Map created successfully\n");
+            
+            // Parse width and height from JSON body
+            std::regex widthRegex("\"width\"\\s*:\\s*([0-9]+)");
+            std::regex heightRegex("\"height\"\\s*:\\s*([0-9]+)");
+            std::smatch widthMatch, heightMatch;
+            
+            if (std::regex_search(body, widthMatch, widthRegex) && 
+                std::regex_search(body, heightMatch, heightRegex)) {
+                int width = std::stoi(widthMatch[1]);
+                int height = std::stoi(heightMatch[1]);
+                
+                // Create and store the map
+                maps.emplace(id, Map(width, height));
+                std::cout << "Created map with id=" << id << ", width=" << width << ", height=" << height << std::endl;
+                
+                return "Map created successfully\n";
+            } else {
+                return "Failed to parse map dimensions\n";
+            }
         }
 
         if (logger) logger->log(LogLevel::Warn, "Failed to create map (bad path)");
@@ -171,23 +201,44 @@ void Server::initializeHandlers() {
     registerEndpoint("PATCH /map/{id}", [this](const std::string& request) {
         // Update map
         std::istringstream requestStream(request);
-        std::string method, path, body;
+        std::string method, path;
         requestStream >> method >> path;
-        std::getline(requestStream, body);
+        
+        std::string body = extractBody(request);
 
         std::regex idRegex("PATCH /map/([0-9]+)");
         std::smatch match;
         if (std::regex_search(path, match, idRegex)) {
             int id = std::stoi(match[1]);
             if (maps.find(id) != maps.end()) {
+                // TODO: Implement Map::deserialize or parse JSON body
                 // maps[id] = Map::deserialize(body);
                 if (logger) logger->log(LogLevel::Info, "Updated map id=" + std::to_string(id));
                 return std::string("Map updated successfully\n");
             }
         }
 
-        if (logger) logger->log(LogLevel::Warn, "Patch map not found");
-        return std::string("Map not found\n");
+        return "Map not found\n";
+    });
+
+    registerEndpoint("GET /map", [this](const std::string& request) {
+        // Return all maps as JSON
+        std::ostringstream response;
+        response << "[";
+        for (const auto& [id, map] : maps) {
+            response << "{\"id\":\"" << id << "\""
+                    << ",\"name\":\"Map " << id << "\""
+                    << ",\"width\":" << map.getWidth() 
+                    << ",\"height\":" << map.getHeight() 
+                    << "},";
+        }
+        std::string result = response.str();
+        if (!maps.empty()) {
+            result.pop_back(); // Remove trailing comma
+        }
+        result += "]";
+
+        return result;
     });
 
     registerEndpoint("DELETE /map/{id}", [this](const std::string& request) {
