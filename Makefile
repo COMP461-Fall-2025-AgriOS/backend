@@ -3,7 +3,7 @@ CXX = g++
 CXXFLAGS = -I/usr/include -Wall -O2 -pthread
 
 # Main
-SRC = main.cpp Robot.cpp Server.cpp Map.cpp
+SRC = main.cpp Robot.cpp Server.cpp Map.cpp Logger.cpp
 
 OBJ = $(SRC:.cpp=.o)
 

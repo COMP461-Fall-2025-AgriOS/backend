@@ -1,6 +1,7 @@
 #include "Server.h"
 #include "Robot.h"
 #include "Map.h"
+#include "Logger.h"
 #include <iostream>
 #include <sstream>
 #include <chrono>
@@ -15,7 +16,12 @@
 #include <regex>
 #include <arpa/inet.h>
 
-Server::Server(int port) : port(port), running(false) {}
+Server::Server(int port) : port(port), running(false) {
+    // default logger
+    logger = makeConsoleLogger();
+}
+
+Server::Server(int port, std::unique_ptr<Logger> inLogger) : port(port), running(false), logger(std::move(inLogger)) {}
 
 Server::~Server() {
     stop();
@@ -36,7 +42,8 @@ void Server::initializeHandlers() {
         Robot newRobot = Robot::deserialize(body);
         robots[newRobot.id] = newRobot;
 
-        return "Robot created successfully\n";
+        if (logger) logger->log(LogLevel::Info, "Created robot id=" + std::to_string(newRobot.id));
+        return std::string("Robot created successfully\n");
     });
 
     registerEndpoint("POST /robots", [this](const std::string& request) {
@@ -51,7 +58,8 @@ void Server::initializeHandlers() {
             robots[robot.id] = robot;
         }
 
-        return "Robots created successfully\n";
+        if (logger) logger->log(LogLevel::Info, "Created " + std::to_string(newRobots.size()) + " robots");
+        return std::string("Robots created successfully\n");
     });
 
     registerEndpoint("PATCH /robots/{id}", [this](const std::string& request) {
@@ -67,11 +75,13 @@ void Server::initializeHandlers() {
             int id = std::stoi(match[1]);
             if (robots.find(id) != robots.end()) {
                 robots[id] = Robot::deserialize(body);
-                return "Robot updated successfully\n";
+                if (logger) logger->log(LogLevel::Info, "Updated robot id=" + std::to_string(id));
+                return std::string("Robot updated successfully\n");
             }
         }
 
-        return "Robot not found\n";
+        if (logger) logger->log(LogLevel::Warn, "Patch robot not found");
+        return std::string("Robot not found\n");
     });
 
     registerEndpoint("GET /robots", [this](const std::string& request) {
@@ -87,6 +97,7 @@ void Server::initializeHandlers() {
         }
         result += "]";
 
+        if (logger) logger->log(LogLevel::Info, "Fetched all robots, count=" + std::to_string(robots.size()));
         return result;
     });
 
@@ -101,10 +112,12 @@ void Server::initializeHandlers() {
         if (std::regex_search(path, match, idRegex)) {
             int id = std::stoi(match[1]);
             if (robots.find(id) != robots.end()) {
+                if (logger) logger->log(LogLevel::Info, "Fetched robot id=" + std::to_string(id));
                 return std::string(robots[id].serialize());
             }
         }
 
+        if (logger) logger->log(LogLevel::Warn, "Get robot not found");
         return std::string("Robot not found\n");
     });
 
@@ -119,17 +132,20 @@ void Server::initializeHandlers() {
         if (std::regex_search(path, match, idRegex)) {
             int id = std::stoi(match[1]);
             if (robots.erase(id)) {
-                return "Robot deleted successfully\n";
+                if (logger) logger->log(LogLevel::Info, "Deleted robot id=" + std::to_string(id));
+                return std::string("Robot deleted successfully\n");
             }
         }
 
-        return "Robot not found\n";
+        if (logger) logger->log(LogLevel::Warn, "Delete robot not found");
+        return std::string("Robot not found\n");
     });
 
     registerEndpoint("DELETE /robots", [this](const std::string& request) {
         // Delete all robots
         robots.clear();
-        return "All robots deleted successfully\n";
+        if (logger) logger->log(LogLevel::Info, "Deleted all robots");
+        return std::string("All robots deleted successfully\n");
     });
 
     registerEndpoint("POST /map/{id}", [this](const std::string& request) {
@@ -144,10 +160,12 @@ void Server::initializeHandlers() {
         if (std::regex_search(path, match, idRegex)) {
             int id = std::stoi(match[1]);
             // maps[id] = Map::deserialize(body);
-            return "Map created successfully\n";
+            if (logger) logger->log(LogLevel::Info, "Created map id=" + std::to_string(id));
+            return std::string("Map created successfully\n");
         }
 
-        return "Failed to create map\n";
+        if (logger) logger->log(LogLevel::Warn, "Failed to create map (bad path)");
+        return std::string("Failed to create map\n");
     });
 
     registerEndpoint("PATCH /map/{id}", [this](const std::string& request) {
@@ -163,11 +181,13 @@ void Server::initializeHandlers() {
             int id = std::stoi(match[1]);
             if (maps.find(id) != maps.end()) {
                 // maps[id] = Map::deserialize(body);
-                return "Map updated successfully\n";
+                if (logger) logger->log(LogLevel::Info, "Updated map id=" + std::to_string(id));
+                return std::string("Map updated successfully\n");
             }
         }
 
-        return "Map not found\n";
+        if (logger) logger->log(LogLevel::Warn, "Patch map not found");
+        return std::string("Map not found\n");
     });
 
     registerEndpoint("DELETE /map/{id}", [this](const std::string& request) {
@@ -181,11 +201,13 @@ void Server::initializeHandlers() {
         if (std::regex_search(path, match, idRegex)) {
             int id = std::stoi(match[1]);
             if (maps.erase(id)) {
-                return "Map deleted successfully\n";
+                if (logger) logger->log(LogLevel::Info, "Deleted map id=" + std::to_string(id));
+                return std::string("Map deleted successfully\n");
             }
         }
 
-        return "Map not found\n";
+        if (logger) logger->log(LogLevel::Warn, "Delete map not found");
+        return std::string("Map not found\n");
     });
 }
 
@@ -193,7 +215,7 @@ void Server::start() {
     initializeHandlers();
     running = true;
     serverThread = std::thread(&Server::run, this);
-    std::cout << "Server started on port " << port << std::endl;
+    if (logger) logger->log(LogLevel::Info, "Server started on port " + std::to_string(port));
 }
 
 void Server::stop() {
@@ -201,7 +223,7 @@ void Server::stop() {
     if (serverThread.joinable()) {
         serverThread.join();
     }
-    std::cout << "Server stopped." << std::endl;
+    if (logger) logger->log(LogLevel::Info, "Server stopped.");
 }
 
 void Server::registerEndpoint(const std::string& endpoint, std::function<std::string(const std::string&)> handler) {
@@ -234,20 +256,19 @@ void Server::run() {
         socklen_t client_len = sizeof(client_address);
         int client_fd = accept(server_fd, (struct sockaddr*)&client_address, &client_len);
         if (client_fd < 0) {
-            if (running) {
-                std::cerr << "Failed to accept connection" << std::endl;
+            if (running && logger) {
+                logger->log(LogLevel::Error, "Failed to accept connection");
             }
             continue;
         }
 
-        std::cout << "New client accepted from "
-                  << inet_ntoa(client_address.sin_addr) << ":"
-                  << ntohs(client_address.sin_port) << std::endl;
+        if (logger) logger->log(LogLevel::Info, std::string("New client accepted from ") + inet_ntoa(client_address.sin_addr) + ":" + std::to_string(ntohs(client_address.sin_port)));
 
         char buffer[1024] = {0};
         int bytes_read = read(client_fd, buffer, sizeof(buffer));
         if (bytes_read > 0) {
             std::string request(buffer, bytes_read);
+            if (logger) logger->log(LogLevel::Debug, "Received request: " + request);
             std::string response = handleRequest(request);
             send(client_fd, response.c_str(), response.size(), 0);
         }
