@@ -16,7 +16,7 @@ all: $(TARGET)
 build: all
 
 $(TARGET): $(OBJ)
-	$(CXX) $(CXXFLAGS) $(OBJ) -o $(TARGET) -lstdc++fs
+	$(CXX) $(CXXFLAGS) $(OBJ) -o $(TARGET)
 
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
