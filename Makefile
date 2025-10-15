@@ -23,4 +23,4 @@ $(TARGET): $(OBJ)
 
 # Clean up build directory and executables
 clean:
-	rm -rf $(OBJ) $(TARGET)
+	rm -rf $(OBJ) $(TARGET) core.*
