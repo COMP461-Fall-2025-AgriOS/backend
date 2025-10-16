@@ -71,6 +71,16 @@ void Map::initializeEmpty()
     }
 }
 
+void Map::addRobot(const Robot& robot)
+{
+    robots.push_back(robot);
+}
+
+void Map::removeRobot(const Robot& robot)
+{
+    robots.erase(std::remove(robots.begin(), robots.end(), robot), robots.end());
+}
+
 // Serialize to JSON-like format
 std::string Map::serialize() const
 {
@@ -92,5 +102,17 @@ std::string Map::serialize() const
     }
     out << "]";
     out << '}';
+    return out.str();
+}
+
+std::string Map::serializeRobots() const
+{
+    std::ostringstream out;
+    out << "[";
+    for (const auto& robot : robots)
+    {
+        out << robot.serialize() << ",";
+    }
+    out << "]";
     return out.str();
 }

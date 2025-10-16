@@ -6,6 +6,8 @@
 #include <cctype>
 #include <stdexcept>
 #include <cmath>
+#include <queue>
+#include <limits>
 
 namespace {
     std::string escapeString(const std::string& input)
@@ -351,4 +353,94 @@ std::vector<Robot> Robot::deserializeList(const std::string& data) {
         }
     }
     return robots;
+}
+
+void Robot::pathfind(const Map& map, const std::vector<float>& target)
+{
+    if (target.size() < 2) return;
+
+    // Convert to grid coordinates
+    std::pair<int, int> start = getGridPosition();
+    int goalX = static_cast<int>(std::round(target[0]));
+    int goalY = static_cast<int>(std::round(target[1]));
+
+    // Bounds and accessibility checks
+    if (goalX < 0 || goalX >= map.getWidth() || goalY < 0 || goalY >= map.getHeight()) return;
+    if (!map.isAccessible(goalX, goalY)) return;
+    if (start.first == goalX && start.second == goalY) return;
+
+    const int width = map.getWidth();
+    const int height = map.getHeight();
+    const int total = width * height;
+
+    auto indexOf = [width](int x, int y) { return y * width + x; };
+
+    // Dijkstra structures
+    std::vector<int> dist(total, std::numeric_limits<int>::max());
+    std::vector<int> prev(total, -1);
+
+    struct Node { int cost; int x; int y; };
+    struct Cmp { bool operator()(const Node& a, const Node& b) const { return a.cost > b.cost; } };
+    std::priority_queue<Node, std::vector<Node>, Cmp> pq;
+
+    int sx = start.first;
+    int sy = start.second;
+    dist[indexOf(sx, sy)] = 0;
+    pq.push({0, sx, sy});
+
+    // 4 directional movement, 1 cost per step
+    const int dx[4] = {1, -1, 0, 0};
+    const int dy[4] = {0, 0, 1, -1};
+
+    while (!pq.empty())
+    {
+        Node cur = pq.top();
+        pq.pop();
+
+        if (cur.x == goalX && cur.y == goalY) break;
+
+        int curIdx = indexOf(cur.x, cur.y);
+        if (cur.cost != dist[curIdx]) continue; // stale
+
+        for (int dir = 0; dir < 4; ++dir)
+        {
+            int nx = cur.x + dx[dir];
+            int ny = cur.y + dy[dir];
+            if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+            if (!map.isAccessible(nx, ny)) continue;
+
+            int nIdx = indexOf(nx, ny);
+            int nCost = cur.cost + 1;
+            if (nCost < dist[nIdx])
+            {
+                dist[nIdx] = nCost;
+                prev[nIdx] = curIdx;
+                pq.push({nCost, nx, ny});
+            }
+        }
+    }
+
+    // Reconstruct path
+    int goalIdx = indexOf(goalX, goalY);
+    if (prev[goalIdx] == -1) return; // unreachable
+
+    std::vector<std::pair<int,int>> path;
+    for (int at = goalIdx; at != -1; at = prev[at])
+    {
+        int x = at % width;
+        int y = at / width;
+        path.emplace_back(x, y);
+    }
+    std::reverse(path.begin(), path.end());
+
+    // Move along the path
+    for (size_t i = 1; i < path.size(); ++i)
+    {
+        const auto& step = path[i];
+        if (!moveToGrid(step.first, step.second, map))
+        {
+            // If a step becomes invalid stop
+            break;
+        }
+    }
 }
