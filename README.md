@@ -52,3 +52,26 @@
 - The server will respond with appropriate handlers for the registered endpoints.
 - If you encounter issues, ensure the port is open and the tunnel is correctly configured.
 
+## Module callbacks (runtime)
+
+The server provides a `ModuleManager` singleton to register runtime callbacks for modules. Example usage from a planner or other runtime component:
+
+```cpp
+#include "ModuleManager.h"
+
+// Register a callback
+ModuleManager::instance().registerCallback("<module-uuid>", [](const std::string& ctx){
+   // ctx can be JSON or any encoded context your module expects
+   std::cout << "Module called with ctx=" << ctx << std::endl;
+});
+
+// Later, invoke a module by id
+ModuleManager::instance().invoke("<module-uuid>", "{\"robotId\":\"abc\"}");
+
+// Invoke all registered callbacks
+ModuleManager::instance().invokeAll("{\"broadcast\":true}");
+```
+
+The server API also supports CRUD for modules under `/modules` which manipulates the set of available modules.
+
+

@@ -2,6 +2,7 @@
 #include "Robot.h"
 #include "Map.h"
 #include "Logger.h"
+#include "Module.h"
 #include <iostream>
 #include <sstream>
 #include <chrono>
@@ -27,19 +28,17 @@ Server::~Server() {
     stop();
 }
 
-// Add maps and robots lists
 std::unordered_map<std::string, Robot> robots;
 std::unordered_map<std::string, Map> maps;
+std::unordered_map<std::string, Module> modules;
 
 // Helper function to extract body from HTTP request
 std::string extractBody(const std::string& request) {
-    // Find the double newline that separates headers from body
     size_t bodyStart = request.find("\r\n\r\n");
     if (bodyStart != std::string::npos) {
         return request.substr(bodyStart + 4);
     }
     
-    // Try single newline separator as fallback
     bodyStart = request.find("\n\n");
     if (bodyStart != std::string::npos) {
         return request.substr(bodyStart + 2);
@@ -50,7 +49,6 @@ std::string extractBody(const std::string& request) {
 
 void Server::initializeHandlers() {
     registerEndpoint("POST /robots/{id}", [this](const std::string& request) {
-        // Extract robot data from request and add to storage
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -69,7 +67,6 @@ void Server::initializeHandlers() {
     });
 
     registerEndpoint("POST /robots", [this](const std::string& request) {
-        // Extract robots data from request and add to storage
         std::string body = extractBody(request);
 
         std::vector<Robot> newRobots = Robot::deserializeList(body);
@@ -82,14 +79,12 @@ void Server::initializeHandlers() {
     });
 
     registerEndpoint("PATCH /robots/{id}", [this](const std::string& request) {
-        // Extract robot ID and update its attributes
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
         
         std::string body = extractBody(request);
 
-        // ID regex: UUID format (lowercase hex)
         std::regex idRegex("/robots/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
         std::smatch match;
         if (std::regex_search(path, match, idRegex)) {
@@ -106,7 +101,6 @@ void Server::initializeHandlers() {
     });
 
     registerEndpoint("GET /robots", [this](const std::string& request) {
-        // Return all robots as JSON
         std::ostringstream response;
         response << "[";
         for (const auto& [id, robot] : robots) {
@@ -123,7 +117,6 @@ void Server::initializeHandlers() {
     });
 
     registerEndpoint("GET /robots/{id}", [this](const std::string& request) {
-        // Return specific robot as JSON
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -143,7 +136,6 @@ void Server::initializeHandlers() {
     });
 
     registerEndpoint("DELETE /robots/{id}", [this](const std::string& request) {
-        // Delete specific robot
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -163,37 +155,131 @@ void Server::initializeHandlers() {
     });
 
     registerEndpoint("DELETE /robots", [this](const std::string& request) {
-        // Delete all robots
         robots.clear();
         if (logger) logger->log(LogLevel::Info, "Deleted all robots");
         return std::string("All robots deleted successfully\n");
     });
 
+    registerEndpoint("POST /modules", [this](const std::string& request) {
+        std::string body = extractBody(request);
+        std::vector<Module> newModules = Module::deserializeList(body);
+        for (const auto &m : newModules) {
+            modules[m.id] = m;
+            if (logger) logger->log(LogLevel::Info, "Added module id=" + m.id + " name=" + m.name);
+        }
+        return std::string("Modules created\n");
+    });
+
+    registerEndpoint("POST /modules/{id}", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+        std::string body = extractBody(request);
+        Module m = Module::deserialize(body);
+        std::regex idRegex("/modules/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
+        std::smatch match;
+        if (std::regex_search(path, match, idRegex)) {
+            m.id = match[1];
+        }
+        modules[m.id] = m;
+        if (logger) logger->log(LogLevel::Info, "Added module id=" + m.id);
+        return std::string("Module created\n");
+    });
+
+    registerEndpoint("GET /modules", [this](const std::string& request) {
+        std::ostringstream out;
+        out << "[";
+        for (const auto &kv : modules) {
+            out << kv.second.serialize() << ",";
+        }
+        std::string s = out.str();
+        if (!modules.empty()) s.pop_back();
+        s += "]";
+        if (logger) logger->log(LogLevel::Info, "Fetched all modules, count=" + std::to_string(modules.size()));
+        return s;
+    });
+
+    registerEndpoint("GET /modules/{id}", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+        std::regex idRegex("/modules/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
+        std::smatch match;
+        if (std::regex_search(path, match, idRegex)) {
+            std::string id = match[1];
+            auto it = modules.find(id);
+            if (it != modules.end()) {
+                if (logger) logger->log(LogLevel::Info, "Fetched module id=" + id);
+                return it->second.serialize();
+            }
+        }
+        if (logger) logger->log(LogLevel::Warn, "Module not found");
+        return std::string("Module not found\n");
+    });
+
+    registerEndpoint("PATCH /modules/{id}", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+        std::string body = extractBody(request);
+        std::regex idRegex("/modules/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
+        std::smatch match;
+        if (std::regex_search(path, match, idRegex)) {
+            std::string id = match[1];
+            auto it = modules.find(id);
+            if (it != modules.end()) {
+                Module m = Module::deserialize(body);
+                // Only update fields that are present in the body; naive replace for now
+                if (!m.name.empty()) it->second.name = m.name;
+                if (!m.description.empty()) it->second.description = m.description;
+                it->second.enabled = m.enabled;
+                if (logger) logger->log(LogLevel::Info, "Updated module id=" + id);
+                return std::string("Module updated\n");
+            }
+        }
+        if (logger) logger->log(LogLevel::Warn, "Module patch not found");
+        return std::string("Module not found\n");
+    });
+
+    registerEndpoint("DELETE /modules/{id}", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+        std::regex idRegex("/modules/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
+        std::smatch match;
+        if (std::regex_search(path, match, idRegex)) {
+            std::string id = match[1];
+            if (modules.erase(id)) {
+                if (logger) logger->log(LogLevel::Info, "Deleted module id=" + id);
+                return std::string("Module deleted\n");
+            }
+        }
+        if (logger) logger->log(LogLevel::Warn, "Module delete not found");
+        return std::string("Module not found\n");
+    });
+
+
     registerEndpoint("POST /map/{id}", [this](const std::string& request) {
-        // Create map
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
         
-    std::string body = extractBody(request);
-    if (logger) logger->log(LogLevel::Debug, std::string("Received map body: ") + body + std::string(" Path: ") + path + std::string(" Method: ") + method);
+        std::string body = extractBody(request);
+        if (logger) logger->log(LogLevel::Debug, std::string("Received map body: ") + body + std::string(" Path: ") + path + std::string(" Method: ") + method);
 
         std::regex idRegex("/map/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
         std::smatch match;
         if (std::regex_search(path, match, idRegex)) {
             std::string id = match[1];
             
-            // Parse width and height from JSON body
             std::regex widthRegex("\"width\"\\s*:\\s*([0-9]+)");
             std::regex heightRegex("\"height\"\\s*:\\s*([0-9]+)");
             std::smatch widthMatch, heightMatch;
-            
-            if (std::regex_search(body, widthMatch, widthRegex) && 
-                std::regex_search(body, heightMatch, heightRegex)) {
+
+            if (std::regex_search(body, widthMatch, widthRegex) && std::regex_search(body, heightMatch, heightRegex)) {
                 int width = std::stoi(widthMatch[1]);
                 int height = std::stoi(heightMatch[1]);
                 
-                // Create and store the map
                 maps.emplace(id, Map(width, height));
                 if (logger) logger->log(LogLevel::Info, "Created map with id=" + id + ", width=" + std::to_string(width) + ", height=" + std::to_string(height));
 
@@ -208,7 +294,6 @@ void Server::initializeHandlers() {
     });
 
     registerEndpoint("PATCH /map/{id}", [this](const std::string& request) {
-        // Update map
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -230,7 +315,6 @@ void Server::initializeHandlers() {
         return std::string("Map not found\n");
     });
 
-    // GET specific map
     registerEndpoint("GET /map/{id}", [this](const std::string& request) {
         std::istringstream requestStream(request);
         std::string method, path;
@@ -254,7 +338,6 @@ void Server::initializeHandlers() {
     });
 
     registerEndpoint("GET /map", [this](const std::string& request) {
-        // Return all maps as JSON
         std::ostringstream response;
         response << "[";
         for (const auto& [id, map] : maps) {
@@ -274,7 +357,6 @@ void Server::initializeHandlers() {
     });
 
     registerEndpoint("DELETE /map/{id}", [this](const std::string& request) {
-        // Delete map
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -367,7 +449,6 @@ std::string Server::handleRequest(const std::string& request) {
     requestStream >> method >> path;
 
     for (const auto& [endpoint, handler] : endpointHandlers) {
-        // endpoint is like "GET /robots/{id}" - split method and path
         auto spacePos = endpoint.find(' ');
         if (spacePos == std::string::npos) continue;
         std::string endpointMethod = endpoint.substr(0, spacePos);
