@@ -2,6 +2,7 @@
 #define H_MAP
 
 #include <vector>
+#include <string>
 
 class Map
 {
@@ -28,6 +29,8 @@ public:
     
     // Initialize grid with all accessible cells (0s)
     void initializeEmpty();
+    std::string serialize() const;
+    // static Map deserialize(const std::string& data);
 };
 
 #endif
