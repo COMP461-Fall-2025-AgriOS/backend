@@ -337,7 +337,7 @@ void Server::initializeHandlers() {
         return std::string("Map not found\n");
     });
 
-    registerEndpoint("GET /map", [this](const std::string& request) {
+    registerEndpoint("GET /map/", [this](const std::string& request) {
         std::ostringstream response;
         response << "[";
         for (const auto& [id, map] : maps) {
