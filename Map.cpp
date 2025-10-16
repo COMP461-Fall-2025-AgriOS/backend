@@ -78,7 +78,7 @@ void Map::addRobot(const Robot& robot)
 
 void Map::removeRobot(const Robot& robot)
 {
-    robots.erase(std::remove(robots.begin(), robots.end(), robot), robots.end());
+    robots.erase(robots.end());
 }
 
 // Serialize to JSON-like format
