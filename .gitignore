@@ -1,0 +1,32 @@
+# Build artifacts
+/build/
+
+# Top-level binary
+/agrios_backend
+
+# Plugin shared objects
+plugins/**/*.so
+plugins/**/*.dylib
+
+# Object files and static libraries
+*.o
+*.a
+
+# Editor and OS files
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Logs
+*.log
+
+# CMake (if ever added)
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Python envs
+venv/
+.env
