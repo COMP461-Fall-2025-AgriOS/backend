@@ -8,7 +8,7 @@ SRCS = watering_plugin.cpp
 all: $(TARGET)
 
 $(TARGET): $(SRCS)
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
+	@$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
 
 clean:
-	rm -f $(TARGET) *.o
+	@rm -f $(TARGET) *.o
