@@ -23,6 +23,7 @@ struct Robot
     std::vector<float> getPos() const;
     void setPosition(float x, float y);
     void setPosition(const std::vector<float>& newPos);
+	void pathfind(const Map& map, const std::vector<float>& target);
     
     // Movement validation and execution
     bool canMoveTo(float x, float y, const Map& map) const;

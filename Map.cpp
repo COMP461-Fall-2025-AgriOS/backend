@@ -1,5 +1,6 @@
 #include "Map.h"
 #include <stdexcept>
+#include <sstream>
 
 Map::Map(int width, int height) : width(width), height(height)
 {
@@ -68,4 +69,50 @@ void Map::initializeEmpty()
             grid[y][x] = 0; // Set all cells as accessible
         }
     }
+}
+
+void Map::addRobot(const Robot& robot)
+{
+    robots.push_back(robot);
+}
+
+void Map::removeRobot(const Robot& robot)
+{
+    robots.erase(robots.end());
+}
+
+// Serialize to JSON-like format
+std::string Map::serialize() const
+{
+    std::ostringstream out;
+    out << '{';
+    out << "\"width\":" << width << ",";
+    out << "\"height\":" << height << ",";
+    out << "\"grid\":[";
+    for (int y = 0; y < height; ++y)
+    {
+        out << "[";
+        for (int x = 0; x < width; ++x)
+        {
+            out << grid[y][x];
+            if (x < width - 1) out << ",";
+        }
+        out << "]";
+        if (y < height - 1) out << ",";
+    }
+    out << "]";
+    out << '}';
+    return out.str();
+}
+
+std::string Map::serializeRobots() const
+{
+    std::ostringstream out;
+    out << "[";
+    for (const auto& robot : robots)
+    {
+        out << robot.serialize() << ",";
+    }
+    out << "]";
+    return out.str();
 }

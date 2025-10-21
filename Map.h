@@ -2,6 +2,8 @@
 #define H_MAP
 
 #include <vector>
+#include <string>
+#include "Robot.h"
 
 class Map
 {
@@ -9,6 +11,7 @@ private:
     int width;
     int height;
     std::vector<std::vector<int>> grid; // 0 = accessible, 1 = inaccessible
+    std::vector<Robot> robots;
 
 public:
     // Constructor that takes width and height
@@ -17,6 +20,9 @@ public:
     // Getter methods
     int getWidth() const;
     int getHeight() const;
+    std::vector<Robot> getRobots() const;
+    void addRobot(const Robot& robot);
+    void removeRobot(const Robot& robot);
     
     // Grid access methods
     int getCell(int x, int y) const;
@@ -28,6 +34,9 @@ public:
     
     // Initialize grid with all accessible cells (0s)
     void initializeEmpty();
+    std::string serialize() const;
+    std::string serializeRobots() const;
+    // static Map deserialize(const std::string& data);
 };
 
 #endif
