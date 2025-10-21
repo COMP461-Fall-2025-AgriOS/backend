@@ -6,6 +6,10 @@
 #include <functional>
 #include <map>
 #include "Logger.h"
+#include <vector>
+#include <memory>
+#include <unordered_set>
+#include "plugins/PluginAPI.h"
 
 class Server {
 public:
@@ -18,6 +22,8 @@ public:
 
     void registerEndpoint(const std::string& endpoint, std::function<std::string(const std::string&)> handler);
 
+    int loadPluginsFromDirectory(const std::string& dirPath);
+
 private:
     int port;
     bool running;
@@ -29,4 +35,22 @@ private:
     std::string handleRequest(const std::string& request);
 
     void initializeHandlers();
+
+    void unloadPlugins();
+
+private:
+    struct PluginEntry {
+        void* handle = nullptr; // dlopen handle
+        void (*stopFn)() = nullptr;
+        std::string path;
+        std::string moduleId;
+    };
+
+    std::vector<PluginEntry> loadedPlugins;
+    std::unordered_set<std::string> enabledPlugins;
+
+    HostAPI hostApi;
+    void* hostCtx = nullptr;
+
+    std::string pluginsDirectory;
 };

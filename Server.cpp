@@ -16,10 +16,46 @@
 #include <unistd.h>
 #include <regex>
 #include <arpa/inet.h>
+#include <dirent.h>
+#include <dlfcn.h>
+#include "plugins/PluginAPI.h"
+#include "ModuleManager.h"
+#include <algorithm>
+#include <unordered_set>
+
+// Host API helper implementations (C-style functions matching PluginAPI signatures)
+static void host_register_impl(void* host_ctx, const char* moduleId, plugin_callback_fn cb) {
+    if (!moduleId || !cb) return;
+    std::string id(moduleId);
+    ModuleManager::instance().registerCallback(id, [cb](const std::string& ctx){ cb(ctx.c_str()); });
+}
+
+static void host_unregister_impl(void* host_ctx, const char* moduleId) {
+    if (!moduleId) return;
+    ModuleManager::instance().unregisterCallback(moduleId);
+}
+
+static void host_log_impl(void* host_ctx, int level, const char* msg) {
+    if (!msg) return;
+    const char* lvl = "INFO";
+    switch (level) {
+        case 1: lvl = "WARN"; break;
+        case 2: lvl = "ERROR"; break;
+        case 3: lvl = "DEBUG"; break;
+        default: lvl = "INFO"; break;
+    }
+    std::cerr << "[plugin-host-" << lvl << "] " << msg << std::endl;
+}
 
 Server::Server(int port) : port(port), running(false) {
     // default logger
     logger = makeConsoleLogger();
+
+    // prepare host API
+    hostApi.host_ctx = this;
+    hostApi.register_callback = &host_register_impl;
+    hostApi.unregister_callback = &host_unregister_impl;
+    hostApi.log = &host_log_impl;
 }
 
 Server::Server(int port, std::unique_ptr<Logger> inLogger) : port(port), running(false), logger(std::move(inLogger)) {}
@@ -48,6 +84,80 @@ std::string extractBody(const std::string& request) {
 }
 
 void Server::initializeHandlers() {
+    // Expose available plugins to clients
+    registerEndpoint("GET /plugins", [this](const std::string& request) {
+        std::ostringstream out;
+        out << "[";
+        if (!pluginsDirectory.empty()) {
+            DIR* dir = opendir(pluginsDirectory.c_str());
+            if (dir) {
+                struct dirent* ent;
+                bool first = true;
+                while ((ent = readdir(dir)) != nullptr) {
+                    std::string name = ent->d_name;
+                    if (name.size() > 3 && name.substr(name.size()-3) == ".so") {
+                        std::string id = name.substr(0, name.size()-3);
+                        if (!first) out << ",";
+                        out << '"' << id << '"';
+                        first = false;
+                    }
+                }
+                closedir(dir);
+            }
+        }
+        out << "]";
+        return out.str();
+    });
+
+    // Get currently enabled plugins
+    registerEndpoint("GET /enabled-plugins", [this](const std::string& request) {
+        std::ostringstream out;
+        out << "[";
+        bool first = true;
+        for (const auto &id : enabledPlugins) {
+            if (!first) out << ",";
+            out << '"' << id << '"';
+            first = false;
+        }
+        out << "]";
+        return out.str();
+    });
+
+    // Set enabled plugins (accept a JSON array of strings in the body)
+    registerEndpoint("POST /enabled-plugins", [this](const std::string& request) {
+        std::string body = extractBody(request);
+        std::unordered_set<std::string> newSet;
+        std::regex re("\"([^\"]+)\"");
+        std::smatch m;
+        std::string s = body;
+        while (std::regex_search(s, m, re)) {
+            newSet.insert(m[1]);
+            s = m.suffix();
+        }
+        enabledPlugins = std::move(newSet);
+        if (logger) logger->log(LogLevel::Info, "Updated enabled plugins, count=" + std::to_string(enabledPlugins.size()));
+        return std::string("Enabled plugins updated\n");
+    });
+
+    // Invoke a plugin by id (only if enabled)
+    registerEndpoint("POST /invoke/{id}", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+        std::string body = extractBody(request);
+        std::regex idRegex("/invoke/([^/]+)");
+        std::smatch match;
+        if (std::regex_search(path, match, idRegex)) {
+            std::string id = match[1];
+            if (enabledPlugins.find(id) == enabledPlugins.end()) {
+                return std::string("Plugin not enabled\n");
+            }
+            bool ok = ModuleManager::instance().invoke(id, body);
+            return ok ? std::string("Invoked\n") : std::string("Plugin not found\n");
+        }
+        return std::string("Bad request\n");
+    });
+
     registerEndpoint("POST /robots/{id}", [this](const std::string& request) {
         std::istringstream requestStream(request);
         std::string method, path;
@@ -388,7 +498,91 @@ void Server::stop() {
     if (serverThread.joinable()) {
         serverThread.join();
     }
+    // unload any plugins that were loaded
+    unloadPlugins();
+
     if (logger) logger->log(LogLevel::Info, "Server stopped.");
+}
+
+// Load all .so files in dirPath. For each plugin, call plugin_start(&hostApi, moduleId)
+int Server::loadPluginsFromDirectory(const std::string& dirPath) {
+    // remember directory for listing
+    pluginsDirectory = dirPath;
+    DIR* dir = opendir(dirPath.c_str());
+    if (!dir) {
+        if (logger) logger->log(LogLevel::Warn, std::string("Failed to open plugins directory: ") + dirPath);
+        return 0;
+    }
+
+    int loaded = 0;
+    struct dirent* ent;
+    while ((ent = readdir(dir)) != nullptr) {
+        std::string name = ent->d_name;
+        if (name.size() > 3 && name.substr(name.size()-3) == ".so") {
+            std::string fullpath = dirPath + "/" + name;
+            void* handle = dlopen(fullpath.c_str(), RTLD_NOW | RTLD_LOCAL);
+            if (!handle) {
+                if (logger) logger->log(LogLevel::Error, std::string("dlopen failed for ") + fullpath + ": " + dlerror());
+                continue;
+            }
+
+            using start_fn_t = int(*)(const HostAPI*, const char*);
+            using stop_fn_t = void(*)();
+
+            dlerror(); // clear
+            start_fn_t start = reinterpret_cast<start_fn_t>(dlsym(handle, "plugin_start"));
+            const char* dlsym_err = dlerror();
+            if (dlsym_err || !start) {
+                if (logger) logger->log(LogLevel::Warn, std::string("plugin_start not found in ") + fullpath);
+                dlclose(handle);
+                continue;
+            }
+
+            stop_fn_t stop = reinterpret_cast<stop_fn_t>(dlsym(handle, "plugin_stop"));
+            // stop may be optional; still allow plugin to load
+
+            // Use file base name (without .so) as moduleId
+            std::string moduleId = name.substr(0, name.size()-3);
+
+            int rc = start(&hostApi, moduleId.c_str());
+            if (rc != 0) {
+                if (logger) logger->log(LogLevel::Warn, std::string("plugin_start failed for ") + fullpath);
+                if (stop) stop();
+                dlclose(handle);
+                continue;
+            }
+
+            PluginEntry entry;
+            entry.handle = handle;
+            entry.stopFn = stop;
+            entry.path = fullpath;
+            entry.moduleId = moduleId;
+            loadedPlugins.push_back(entry);
+            ++loaded;
+            if (logger) logger->log(LogLevel::Info, std::string("Loaded plugin: ") + fullpath + " as moduleId=" + moduleId);
+        }
+    }
+
+    closedir(dir);
+    return loaded;
+}
+
+// After initializeHandlers registration, expose endpoints to get/set enabled plugins
+    
+
+void Server::unloadPlugins() {
+    // Unregister and dlclose in reverse order
+    for (auto it = loadedPlugins.rbegin(); it != loadedPlugins.rend(); ++it) {
+        if (it->stopFn) {
+            try { it->stopFn(); } catch (...) {}
+        }
+        if (it->handle) {
+            dlclose(it->handle);
+            it->handle = nullptr;
+        }
+        if (logger) logger->log(LogLevel::Info, std::string("Unloaded plugin: ") + it->path);
+    }
+    loadedPlugins.clear();
 }
 
 void Server::registerEndpoint(const std::string& endpoint, std::function<std::string(const std::string&)> handler) {

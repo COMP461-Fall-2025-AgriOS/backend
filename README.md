@@ -75,3 +75,100 @@ ModuleManager::instance().invokeAll("{\"broadcast\":true}");
 The server API also supports CRUD for modules under `/modules` which manipulates the set of available modules.
 
 
+## Plugin development
+
+Agrios supports loading external plugins (shared objects) at startup. Plugins must implement a minimal C API so they can be built independently and loaded with `dlopen`.
+
+Plugin API (header: `plugins/PluginAPI.h`)
+
+- `int plugin_start(const HostAPI* api, const char* moduleId)` — called when the host loads the plugin. Return 0 on success.
+- `void plugin_stop()` — called when the host unloads the plugin.
+
+HostAPI provides the following callbacks the plugin can call:
+
+- `host_api->register_callback(host_ctx, moduleId, plugin_callback_fn cb)` — register a callback that will be invoked when `ModuleManager::invoke(moduleId, ctx)` is called.
+- `host_api->unregister_callback(host_ctx, moduleId)` — unregister the callback.
+- `host_api->log(host_ctx, level, msg)` — log a message through the host.
+
+Example plugin
+--------------
+An example plugin is provided at `plugins/examples/watering/`. Build it with:
+
+```sh
+cd plugins/examples/watering
+make
+```
+
+Start the server and point it at the example plugin directory:
+
+```sh
+./agrios_backend --port 8080 --plugins-dir ./plugins/examples/watering
+```
+
+The server will dlopen any `.so` files in the plugins directory and call their `plugin_start` function. The example registers a callback under the module id `libwatering_example` (filename without `.so`). You can trigger it by invoking the module from code via `ModuleManager::instance().invoke("libwatering_example", "{...}")`.
+
+Notes and best practices
+------------------------
+- Plugins should be compiled with a compatible C++ runtime and ABI for the host (same compiler and standard library versions when possible).
+- For a forward-compatible API, consider versioning `PluginAPI.h` and verifying compatibility in `plugin_start`.
+- Keep plugin initialization fast and avoid blocking long-running work on the host thread; spawn worker threads if needed.
+
+Plugin endpoints (for front-end)
+--------------------------------
+Agrios exposes simple HTTP endpoints so a front-end can discover available plugins, select which ones to enable, and invoke them.
+
+- List available plugins (files in the plugins directory):
+
+   GET /plugins
+
+   Response: JSON array of module ids (filenames without `.so`).
+
+   Example:
+
+   ```sh
+   curl http://localhost:8080/plugins
+   # => ["libwatering_example","another_plugin"]
+   ```
+
+- Get currently enabled plugins:
+
+   GET /enabled-plugins
+
+   Response: JSON array of enabled module ids.
+
+   Example:
+
+   ```sh
+   curl http://localhost:8080/enabled-plugins
+   # => ["libwatering_example"]
+   ```
+
+- Set enabled plugins (front-end posts JSON array of module ids):
+
+   POST /enabled-plugins
+
+   Request body: JSON array of strings, e.g. `["libwatering_example"]`.
+
+   Example:
+
+   ```sh
+   curl -X POST http://localhost:8080/enabled-plugins -d '["libwatering_example"]'
+   ```
+
+- Invoke an enabled plugin by id (pass context in the body):
+
+   POST /invoke/{moduleId}
+
+   Example:
+
+   ```sh
+   curl -X POST http://localhost:8080/invoke/libwatering_example -d '{"robotId":"robot-1"}'
+   ```
+
+Notes
+-----
+- The plugin listing endpoint reads the configured plugins directory (the directory passed to the server using `--plugins-dir` or the default `./plugins`). Make sure the server is started with the correct path.
+- The `POST /enabled-plugins` endpoint uses a simple parser and accepts a JSON-like array of quoted strings. If you need stricter JSON handling, I can add a small JSON library to parse requests robustly.
+
+
+
