@@ -1,5 +1,6 @@
 #include "Robot.h"
 #include "Map.h"
+#include "SimulationLogger.h"
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
@@ -373,6 +374,10 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
     const int height = map.getHeight();
     const int total = width * height;
 
+    // Create a simulation logger instance (append to simulation.log)
+    SimulationLogger simlog("simulation.log");
+    simlog.logPlannerStart(id, name, this->getGridPosition().first, this->getGridPosition().second, goalX, goalY, width, height);
+
     auto indexOf = [width](int x, int y) { return y * width + x; };
 
     // Dijkstra structures
@@ -397,10 +402,16 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
         Node cur = pq.top();
         pq.pop();
 
+        // Log expansion
+        int parentX = -1, parentY = -1;
+        int curIdx = indexOf(cur.x, cur.y);
+        if (prev[curIdx] != -1) { parentX = prev[curIdx] % width; parentY = prev[curIdx] / width; }
+        simlog.logExpandNode(cur.x, cur.y, cur.cost, parentX, parentY);
+
         if (cur.x == goalX && cur.y == goalY) break;
 
-        int curIdx = indexOf(cur.x, cur.y);
-        if (cur.cost != dist[curIdx]) continue; // stale
+        int curIdx2 = indexOf(cur.x, cur.y);
+        if (cur.cost != dist[curIdx2]) continue; // stale
 
         for (int dir = 0; dir < 4; ++dir)
         {
@@ -416,6 +427,7 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
                 dist[nIdx] = nCost;
                 prev[nIdx] = curIdx;
                 pq.push({nCost, nx, ny});
+                simlog.logPushNode(nx, ny, nCost);
             }
         }
     }
@@ -433,6 +445,8 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
     }
     std::reverse(path.begin(), path.end());
 
+    simlog.logPathReconstructed(path);
+
     // Move along the path
     for (size_t i = 1; i < path.size(); ++i)
     {
@@ -442,5 +456,6 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
             // If a step becomes invalid stop
             break;
         }
+        simlog.logMoveExecuted(step.first, step.second);
     }
 }

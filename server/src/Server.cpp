@@ -484,6 +484,66 @@ void Server::initializeHandlers() {
         if (logger) logger->log(LogLevel::Warn, "Delete map not found");
         return std::string("Map not found\n");
     });
+
+    // Endpoint to invoke pathfinding for a robot against a specific map
+    // Expects JSON body: {"mapId":"<map-uuid>","target":[x,y]}
+    registerEndpoint("POST /robots/{id}/pathfind", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+
+        std::string body = extractBody(request);
+
+        std::regex idRegex("/robots/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})");
+        std::smatch match;
+        if (std::regex_search(path, match, idRegex)) {
+            std::string robotId = match[1];
+            auto rIt = robots.find(robotId);
+            if (rIt == robots.end()) {
+                if (logger) logger->log(LogLevel::Warn, "Pathfind: robot not found id=" + robotId);
+                return std::string("Robot not found\n");
+            }
+
+            std::regex mapIdRe("\"mapId\"\\s*:\\s*\"([^\"]+)\"");
+            std::smatch m2;
+            if (!std::regex_search(body, m2, mapIdRe)) {
+                return std::string("mapId missing\n");
+            }
+            std::string mapId = m2[1];
+            auto mIt = maps.find(mapId);
+            if (mIt == maps.end()) {
+                if (logger) logger->log(LogLevel::Warn, "Pathfind: map not found id=" + mapId);
+                return std::string("Map not found\n");
+            }
+
+            std::regex tgtRe("\"target\"\\s*:\\s*\\[\\s*([0-9.+\-eE]+)\\s*,\\s*([0-9.+\-eE]+)\\s*\\]");
+            std::smatch m3;
+            if (!std::regex_search(body, m3, tgtRe)) {
+                return std::string("target missing\n");
+            }
+            float tx = 0.0f;
+            float ty = 0.0f;
+            try {
+                tx = std::stof(m3[1]);
+                ty = std::stof(m3[2]);
+            } catch (...) {
+                return std::string("bad target values\n");
+            }
+
+            // Execute pathfinding (this will append to simulation.log)
+            try {
+                rIt->second.pathfind(mIt->second, std::vector<float>{tx, ty});
+            } catch (const std::exception& ex) {
+                if (logger) logger->log(LogLevel::Error, std::string("Pathfind exception: ") + ex.what());
+                return std::string("Pathfind failed\n");
+            }
+
+            if (logger) logger->log(LogLevel::Info, "Pathfind executed for robot=" + robotId + " map=" + mapId);
+            return std::string("Pathfind executed\n");
+        }
+
+        return std::string("Bad request\n");
+    });
 }
 
 void Server::start() {

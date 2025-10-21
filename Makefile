@@ -19,6 +19,8 @@ TARGET = agrios_backend
 
 .PHONY: all build clean subdirs plugins
 
+.PHONY: test
+
 all: build
 
 build: subdirs plugins $(TARGET)
@@ -54,3 +56,6 @@ clean:
 	@for d in $(PLUGIN_EXAMPLES); do \
 		if [ -d "$$d" ]; then $(MAKE) -C $$d clean; fi; \
 	done
+
+test: build
+	@python3 tests/run_tests.py
