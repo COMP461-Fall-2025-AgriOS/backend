@@ -16,8 +16,7 @@ int main(int argc, char* argv[]) {
     }
 
     Server server(port);
-    int n = server.loadPluginsFromDirectory(pluginsDir);
-    if (n > 0) std::cout << "Loaded " << n << " plugins from " << pluginsDir << "\n";
+    server.loadPluginsFromDirectory(pluginsDir);
 
     server.start();
 

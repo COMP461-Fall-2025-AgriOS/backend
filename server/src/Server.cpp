@@ -23,7 +23,6 @@
 #include <algorithm>
 #include <unordered_set>
 
-// Host API helper implementations (C-style functions matching PluginAPI signatures)
 static void host_register_impl(void* host_ctx, const char* moduleId, plugin_callback_fn cb) {
     if (!moduleId || !cb) return;
     std::string id(moduleId);

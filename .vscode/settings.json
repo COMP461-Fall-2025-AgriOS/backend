@@ -86,6 +86,8 @@
         "future": "cpp",
         "iostream": "cpp",
         "mutex": "cpp",
-        "typeindex": "cpp"
+        "typeindex": "cpp",
+        "unordered_set": "cpp",
+        "fstream": "cpp"
     }
 }

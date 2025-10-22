@@ -33,10 +33,3 @@ If you have a small program or can call into the running process, call:
 ```cpp
 ModuleManager::instance().invoke("libwatering_example", "{\"robotId\":\"robot-1\"}");
 ```
-
-Or expose an HTTP endpoint that invokes `ModuleManager::instance().invoke(...)`.
-
-Notes
------
-- This example uses the `HostAPI` to register and unregister callbacks. The module id used by the host loader is the filename without the `.so` suffix.
-- The plugin uses `HostAPI::log` to log messages back to the host.
