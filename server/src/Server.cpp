@@ -414,10 +414,24 @@ void Server::initializeHandlers() {
         if (std::regex_search(path, match, idRegex)) {
             std::string id = match[1];
             if (maps.find(id) != maps.end()) {
-                // TODO: Implement Map::deserialize or parse JSON body
-                // maps[id] = Map::deserialize(body);
-                if (logger) logger->log(LogLevel::Info, std::string("Updated map id=") + id);
-                return std::string("Map updated successfully\n");
+                // Parse width and height from JSON body
+                std::regex widthRegex("\"width\"\\s*:\\s*([0-9]+)");
+                std::regex heightRegex("\"height\"\\s*:\\s*([0-9]+)");
+                std::smatch widthMatch, heightMatch;
+
+                if (std::regex_search(body, widthMatch, widthRegex) && std::regex_search(body, heightMatch, heightRegex)) {
+                    int width = std::stoi(widthMatch[1]);
+                    int height = std::stoi(heightMatch[1]);
+                    
+                    // Replace the map with a new one with updated dimensions
+                    maps.erase(id);
+                    maps.emplace(id, Map(width, height));
+                    
+                    if (logger) logger->log(LogLevel::Info, "Updated map id=" + id + ", width=" + std::to_string(width) + ", height=" + std::to_string(height));
+                    return std::string("Map updated successfully\n");
+                } else {
+                    return std::string("Failed to parse map dimensions\n");
+                }
             }
         }
 
