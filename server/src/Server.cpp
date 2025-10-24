@@ -682,10 +682,41 @@ void Server::run() {
 
         if (logger) logger->log(LogLevel::Info, std::string("New client accepted from ") + inet_ntoa(client_address.sin_addr) + ":" + std::to_string(ntohs(client_address.sin_port)));
 
-        char buffer[1024] = {0};
-        int bytes_read = read(client_fd, buffer, sizeof(buffer));
-        if (bytes_read > 0) {
-            std::string request(buffer, bytes_read);
+        // Read the full request (handle large payloads)
+        std::string request;
+        char buffer[4096] = {0};
+        int bytes_read;
+        
+        while ((bytes_read = read(client_fd, buffer, sizeof(buffer) - 1)) > 0) {
+            request.append(buffer, bytes_read);
+            // Check if we've read the complete request
+            if (request.find("\r\n\r\n") != std::string::npos || request.find("\n\n") != std::string::npos) {
+                // Check if Content-Length header exists and if we've read enough
+                size_t clPos = request.find("Content-Length:");
+                if (clPos != std::string::npos) {
+                    size_t clEnd = request.find("\r\n", clPos);
+                    if (clEnd == std::string::npos) clEnd = request.find("\n", clPos);
+                    if (clEnd != std::string::npos) {
+                        int contentLength = std::atoi(request.substr(clPos + 15, clEnd - clPos - 15).c_str());
+                        size_t bodyStart = request.find("\r\n\r\n");
+                        if (bodyStart == std::string::npos) bodyStart = request.find("\n\n");
+                        if (bodyStart != std::string::npos) {
+                            bodyStart += (request[bodyStart + 2] == '\n' ? 2 : 4);
+                            int currentBodySize = request.size() - bodyStart;
+                            if (currentBodySize >= contentLength) {
+                                break; // Got full body
+                            }
+                        }
+                    }
+                } else {
+                    // No Content-Length, assume request is complete
+                    break;
+                }
+            }
+            std::memset(buffer, 0, sizeof(buffer));
+        }
+        
+        if (!request.empty()) {
             if (logger) logger->log(LogLevel::Debug, "Received request: " + request);
             std::string response = handleRequest(request);
             send(client_fd, response.c_str(), response.size(), 0);

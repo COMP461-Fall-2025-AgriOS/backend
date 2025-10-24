@@ -14,6 +14,7 @@ struct Robot
     // These probably need their own data types later idk
     std::string type;
     std::string attributes;
+    std::string mapId; // ID of the map this robot belongs to
 
     std::vector<float> position; // x, y
     float speed; // movement speed per step

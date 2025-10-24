@@ -220,6 +220,7 @@ std::string Robot::serialize() const
     out << "\"id\":\"" << escapeString(id) << "\",";
     out << "\"type\":\"" << escapeString(type) << "\",";
     out << "\"attributes\":\"" << escapeString(attributes) << "\",";
+    out << "\"mapId\":\"" << escapeString(mapId) << "\",";
     out << "\"position\":[";
     for (size_t i = 0; i < position.size(); ++i)
     {
@@ -336,6 +337,7 @@ Robot Robot::deserialize(const std::string& data)
     r.id = parseStringValueByKey(data, "id");
     r.type = parseStringValueByKey(data, "type");
     r.attributes = parseStringValueByKey(data, "attributes");
+    r.mapId = parseStringValueByKey(data, "mapId");
     r.position = parseFloatArrayByKey(data, "position");
     return r;
 }
@@ -343,12 +345,42 @@ Robot Robot::deserialize(const std::string& data)
 std::vector<Robot> Robot::deserializeList(const std::string& data) {
     std::vector<Robot> robots;
     size_t pos = 0;
-    while ((pos = data.find('{', pos)) != std::string::npos) {
-        size_t endPos = data.find('}', pos);
-        if (endPos != std::string::npos) {
-            std::string robotData = data.substr(pos, endPos - pos + 1);
+    
+    while (pos < data.size()) {
+        // Find start of object
+        size_t start = data.find('{', pos);
+        if (start == std::string::npos) break;
+        
+        // Count braces to find matching closing brace
+        int braceCount = 0;
+        size_t i = start;
+        bool inString = false;
+        char prevChar = '\0';
+        
+        while (i < data.size()) {
+            char c = data[i];
+            
+            // Handle string literals to avoid counting braces inside strings
+            if (c == '"' && prevChar != '\\') {
+                inString = !inString;
+            }
+            
+            if (!inString) {
+                if (c == '{') braceCount++;
+                if (c == '}') {
+                    braceCount--;
+                    if (braceCount == 0) break;
+                }
+            }
+            
+            prevChar = c;
+            i++;
+        }
+        
+        if (i < data.size() && braceCount == 0) {
+            std::string robotData = data.substr(start, i - start + 1);
             robots.push_back(deserialize(robotData));
-            pos = endPos + 1;
+            pos = i + 1;
         } else {
             break;
         }
