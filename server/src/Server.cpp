@@ -475,7 +475,18 @@ void Server::initializeHandlers() {
         if (std::regex_search(path, match, idRegex)) {
             std::string id = match[1];
             if (maps.erase(id)) {
-                if (logger) logger->log(LogLevel::Info, std::string("Deleted map id=") + id);
+                // Delete all robots that belong to this map
+                int deletedRobots = 0;
+                for (auto it = robots.begin(); it != robots.end();) {
+                    if (it->second.mapId == id) {
+                        if (logger) logger->log(LogLevel::Info, std::string("Deleted robot id=") + it->second.id + " (map cascade)");
+                        it = robots.erase(it);
+                        deletedRobots++;
+                    } else {
+                        ++it;
+                    }
+                }
+                if (logger) logger->log(LogLevel::Info, std::string("Deleted map id=") + id + " and " + std::to_string(deletedRobots) + " associated robots");
                 return std::string("Map deleted successfully\n");
             }
         }
