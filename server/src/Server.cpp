@@ -23,30 +23,47 @@
 #include <algorithm>
 #include <unordered_set>
 
-static void host_register_impl(void* host_ctx, const char* moduleId, plugin_callback_fn cb) {
-    if (!moduleId || !cb) return;
+static void host_register_impl(void *host_ctx, const char *moduleId, plugin_callback_fn cb)
+{
+    if (!moduleId || !cb)
+        return;
     std::string id(moduleId);
-    ModuleManager::instance().registerCallback(id, [cb](const std::string& ctx){ cb(ctx.c_str()); });
+    ModuleManager::instance().registerCallback(id, [cb](const std::string &ctx)
+                                               { cb(ctx.c_str()); });
 }
 
-static void host_unregister_impl(void* host_ctx, const char* moduleId) {
-    if (!moduleId) return;
+static void host_unregister_impl(void *host_ctx, const char *moduleId)
+{
+    if (!moduleId)
+        return;
     ModuleManager::instance().unregisterCallback(moduleId);
 }
 
-static void host_log_impl(void* host_ctx, int level, const char* msg) {
-    if (!msg) return;
-    const char* lvl = "INFO";
-    switch (level) {
-        case 1: lvl = "WARN"; break;
-        case 2: lvl = "ERROR"; break;
-        case 3: lvl = "DEBUG"; break;
-        default: lvl = "INFO"; break;
+static void host_log_impl(void *host_ctx, int level, const char *msg)
+{
+    if (!msg)
+        return;
+    const char *lvl = "INFO";
+    switch (level)
+    {
+    case 1:
+        lvl = "WARN";
+        break;
+    case 2:
+        lvl = "ERROR";
+        break;
+    case 3:
+        lvl = "DEBUG";
+        break;
+    default:
+        lvl = "INFO";
+        break;
     }
     std::cerr << "[plugin-host-" << lvl << "] " << msg << std::endl;
 }
 
-Server::Server(int port) : port(port), running(false) {
+Server::Server(int port) : port(port), running(false)
+{
     // default logger
     logger = makeConsoleLogger();
 
@@ -59,7 +76,8 @@ Server::Server(int port) : port(port), running(false) {
 
 Server::Server(int port, std::unique_ptr<Logger> inLogger) : port(port), running(false), logger(std::move(inLogger)) {}
 
-Server::~Server() {
+Server::~Server()
+{
     stop();
 }
 
@@ -68,23 +86,28 @@ std::unordered_map<std::string, Map> maps;
 std::unordered_map<std::string, Module> modules;
 
 // Helper function to extract body from HTTP request
-std::string extractBody(const std::string& request) {
+std::string extractBody(const std::string &request)
+{
     size_t bodyStart = request.find("\r\n\r\n");
-    if (bodyStart != std::string::npos) {
+    if (bodyStart != std::string::npos)
+    {
         return request.substr(bodyStart + 4);
     }
-    
+
     bodyStart = request.find("\n\n");
-    if (bodyStart != std::string::npos) {
+    if (bodyStart != std::string::npos)
+    {
         return request.substr(bodyStart + 2);
     }
-    
+
     return "";
 }
 
-void Server::initializeHandlers() {
+void Server::initializeHandlers()
+{
     // Expose available plugins to clients
-    registerEndpoint("GET /plugins", [this](const std::string& request) {
+    registerEndpoint("GET /plugins", [this](const std::string &request)
+                     {
         std::ostringstream out;
         out << "[";
         if (!pluginsDirectory.empty()) {
@@ -105,11 +128,11 @@ void Server::initializeHandlers() {
             }
         }
         out << "]";
-        return out.str();
-    });
+        return out.str(); });
 
     // Get currently enabled plugins
-    registerEndpoint("GET /enabled-plugins", [this](const std::string& request) {
+    registerEndpoint("GET /enabled-plugins", [this](const std::string &request)
+                     {
         std::ostringstream out;
         out << "[";
         bool first = true;
@@ -119,11 +142,11 @@ void Server::initializeHandlers() {
             first = false;
         }
         out << "]";
-        return out.str();
-    });
+        return out.str(); });
 
     // Set enabled plugins (accept a JSON array of strings in the body)
-    registerEndpoint("POST /enabled-plugins", [this](const std::string& request) {
+    registerEndpoint("POST /enabled-plugins", [this](const std::string &request)
+                     {
         std::string body = extractBody(request);
         std::unordered_set<std::string> newSet;
         std::regex re("\"([^\"]+)\"");
@@ -135,11 +158,11 @@ void Server::initializeHandlers() {
         }
         enabledPlugins = std::move(newSet);
         if (logger) logger->log(LogLevel::Info, "Updated enabled plugins, count=" + std::to_string(enabledPlugins.size()));
-        return std::string("Enabled plugins updated\n");
-    });
+        return std::string("Enabled plugins updated\n"); });
 
     // Invoke a plugin by id (only if enabled)
-    registerEndpoint("POST /invoke/{id}", [this](const std::string& request) {
+    registerEndpoint("POST /invoke/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -154,10 +177,10 @@ void Server::initializeHandlers() {
             bool ok = ModuleManager::instance().invoke(id, body);
             return ok ? std::string("Invoked\n") : std::string("Plugin not found\n");
         }
-        return std::string("Bad request\n");
-    });
+        return std::string("Bad request\n"); });
 
-    registerEndpoint("POST /robots/{id}", [this](const std::string& request) {
+    registerEndpoint("POST /robots/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -172,10 +195,10 @@ void Server::initializeHandlers() {
         robots[newRobot.id] = newRobot;
 
         if (logger) logger->log(LogLevel::Info, std::string("Created robot id=") + newRobot.id);
-        return std::string("Robot created successfully\n");
-    });
+        return std::string("Robot created successfully\n"); });
 
-    registerEndpoint("POST /robots", [this](const std::string& request) {
+    registerEndpoint("POST /robots", [this](const std::string &request)
+                     {
         std::string body = extractBody(request);
 
         std::vector<Robot> newRobots = Robot::deserializeList(body);
@@ -184,10 +207,10 @@ void Server::initializeHandlers() {
         }
 
         if (logger) logger->log(LogLevel::Info, "Created " + std::to_string(newRobots.size()) + " robots");
-        return std::string("Robots created successfully\n");
-    });
+        return std::string("Robots created successfully\n"); });
 
-    registerEndpoint("PATCH /robots/{id}", [this](const std::string& request) {
+    registerEndpoint("PATCH /robots/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -206,10 +229,10 @@ void Server::initializeHandlers() {
         }
 
         if (logger) logger->log(LogLevel::Warn, "Patch robot not found");
-        return std::string("Robot not found\n");
-    });
+        return std::string("Robot not found\n"); });
 
-    registerEndpoint("GET /robots", [this](const std::string& request) {
+    registerEndpoint("GET /robots", [this](const std::string &request)
+                     {
         std::ostringstream response;
         response << "[";
         for (const auto& [id, robot] : robots) {
@@ -222,10 +245,10 @@ void Server::initializeHandlers() {
         result += "]";
 
         if (logger) logger->log(LogLevel::Info, "Fetched all robots, count=" + std::to_string(robots.size()));
-        return result;
-    });
+        return result; });
 
-    registerEndpoint("GET /robots/{id}", [this](const std::string& request) {
+    registerEndpoint("GET /robots/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -241,10 +264,10 @@ void Server::initializeHandlers() {
         }
 
         if (logger) logger->log(LogLevel::Warn, "Get robot not found");
-        return std::string("Robot not found\n");
-    });
+        return std::string("Robot not found\n"); });
 
-    registerEndpoint("DELETE /robots/{id}", [this](const std::string& request) {
+    registerEndpoint("DELETE /robots/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -260,26 +283,26 @@ void Server::initializeHandlers() {
         }
 
         if (logger) logger->log(LogLevel::Warn, "Delete robot not found");
-        return std::string("Robot not found\n");
-    });
+        return std::string("Robot not found\n"); });
 
-    registerEndpoint("DELETE /robots", [this](const std::string& request) {
+    registerEndpoint("DELETE /robots", [this](const std::string &request)
+                     {
         robots.clear();
         if (logger) logger->log(LogLevel::Info, "Deleted all robots");
-        return std::string("All robots deleted successfully\n");
-    });
+        return std::string("All robots deleted successfully\n"); });
 
-    registerEndpoint("POST /modules", [this](const std::string& request) {
+    registerEndpoint("POST /modules", [this](const std::string &request)
+                     {
         std::string body = extractBody(request);
         std::vector<Module> newModules = Module::deserializeList(body);
         for (const auto &m : newModules) {
             modules[m.id] = m;
             if (logger) logger->log(LogLevel::Info, "Added module id=" + m.id + " name=" + m.name);
         }
-        return std::string("Modules created\n");
-    });
+        return std::string("Modules created\n"); });
 
-    registerEndpoint("POST /modules/{id}", [this](const std::string& request) {
+    registerEndpoint("POST /modules/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -292,10 +315,10 @@ void Server::initializeHandlers() {
         }
         modules[m.id] = m;
         if (logger) logger->log(LogLevel::Info, "Added module id=" + m.id);
-        return std::string("Module created\n");
-    });
+        return std::string("Module created\n"); });
 
-    registerEndpoint("GET /modules", [this](const std::string& request) {
+    registerEndpoint("GET /modules", [this](const std::string &request)
+                     {
         std::ostringstream out;
         out << "[";
         for (const auto &kv : modules) {
@@ -305,10 +328,10 @@ void Server::initializeHandlers() {
         if (!modules.empty()) s.pop_back();
         s += "]";
         if (logger) logger->log(LogLevel::Info, "Fetched all modules, count=" + std::to_string(modules.size()));
-        return s;
-    });
+        return s; });
 
-    registerEndpoint("GET /modules/{id}", [this](const std::string& request) {
+    registerEndpoint("GET /modules/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -323,10 +346,10 @@ void Server::initializeHandlers() {
             }
         }
         if (logger) logger->log(LogLevel::Warn, "Module not found");
-        return std::string("Module not found\n");
-    });
+        return std::string("Module not found\n"); });
 
-    registerEndpoint("PATCH /modules/{id}", [this](const std::string& request) {
+    registerEndpoint("PATCH /modules/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -347,10 +370,10 @@ void Server::initializeHandlers() {
             }
         }
         if (logger) logger->log(LogLevel::Warn, "Module patch not found");
-        return std::string("Module not found\n");
-    });
+        return std::string("Module not found\n"); });
 
-    registerEndpoint("DELETE /modules/{id}", [this](const std::string& request) {
+    registerEndpoint("DELETE /modules/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -364,11 +387,10 @@ void Server::initializeHandlers() {
             }
         }
         if (logger) logger->log(LogLevel::Warn, "Module delete not found");
-        return std::string("Module not found\n");
-    });
+        return std::string("Module not found\n"); });
 
-
-    registerEndpoint("POST /map/{id}", [this](const std::string& request) {
+    registerEndpoint("POST /map/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -399,10 +421,10 @@ void Server::initializeHandlers() {
         }
 
         if (logger) logger->log(LogLevel::Warn, "Failed to create map (bad path)");
-        return std::string("Failed to create map\n");
-    });
+        return std::string("Failed to create map\n"); });
 
-    registerEndpoint("PATCH /map/{id}", [this](const std::string& request) {
+    registerEndpoint("PATCH /map/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -435,10 +457,10 @@ void Server::initializeHandlers() {
             }
         }
 
-        return std::string("Map not found\n");
-    });
+        return std::string("Map not found\n"); });
 
-    registerEndpoint("GET /map/{id}", [this](const std::string& request) {
+    registerEndpoint("GET /map/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -457,10 +479,10 @@ void Server::initializeHandlers() {
             }
         }
         if (logger) logger->log(LogLevel::Warn, "Get map not found");
-        return std::string("Map not found\n");
-    });
+        return std::string("Map not found\n"); });
 
-    registerEndpoint("GET /map/", [this](const std::string& request) {
+    registerEndpoint("GET /map/", [this](const std::string &request)
+                     {
         std::ostringstream response;
         response << "[";
         for (const auto& [id, map] : maps) {
@@ -476,10 +498,10 @@ void Server::initializeHandlers() {
         }
         result += "]";
 
-        return result;
-    });
+        return result; });
 
-    registerEndpoint("DELETE /map/{id}", [this](const std::string& request) {
+    registerEndpoint("DELETE /map/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -506,12 +528,12 @@ void Server::initializeHandlers() {
         }
 
         if (logger) logger->log(LogLevel::Warn, "Delete map not found");
-        return std::string("Map not found\n");
-    });
+        return std::string("Map not found\n"); });
 
     // Endpoint to invoke pathfinding for a robot against a specific map
     // Expects JSON body: {"mapId":"<map-uuid>","target":[x,y]}
-    registerEndpoint("POST /robots/{id}/pathfind", [this](const std::string& request) {
+    registerEndpoint("POST /robots/{id}/pathfind", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -566,58 +588,71 @@ void Server::initializeHandlers() {
             return std::string("Pathfind executed\n");
         }
 
-        return std::string("Bad request\n");
-    });
+        return std::string("Bad request\n"); });
 }
 
-void Server::start() {
+void Server::start()
+{
     initializeHandlers();
     running = true;
     serverThread = std::thread(&Server::run, this);
-    if (logger) logger->log(LogLevel::Info, "Server started on port " + std::to_string(port));
+    if (logger)
+        logger->log(LogLevel::Info, "Server started on port " + std::to_string(port));
 }
 
-void Server::stop() {
+void Server::stop()
+{
     running = false;
-    if (serverThread.joinable()) {
+    if (serverThread.joinable())
+    {
         serverThread.join();
     }
     // unload any plugins that were loaded
     unloadPlugins();
 
-    if (logger) logger->log(LogLevel::Info, "Server stopped.");
+    if (logger)
+        logger->log(LogLevel::Info, "Server stopped.");
 }
 
 // Load all .so files in dirPath. For each plugin, call plugin_start(&hostApi, moduleId)
-int Server::loadPluginsFromDirectory(const std::string& dirPath) {
+int Server::loadPluginsFromDirectory(const std::string &dirPath)
+{
     // remember directory for listing
     pluginsDirectory = dirPath;
-    DIR* dir = opendir(dirPath.c_str());
-    if (!dir) {
-        if (logger) logger->log(LogLevel::Warn, std::string("Failed to open plugins directory: ") + dirPath);
+    DIR *dir = opendir(dirPath.c_str());
+    if (!dir)
+    {
+        if (logger)
+            logger->log(LogLevel::Warn, std::string("Failed to open plugins directory: ") + dirPath);
         return 0;
     }
 
     int loaded = 0;
-    struct dirent* ent;
-    while ((ent = readdir(dir)) != nullptr) {
+    struct dirent *ent;
+    while ((ent = readdir(dir)) != nullptr)
+    {
         std::string name = ent->d_name;
-        if (name.size() > 3 && name.substr(name.size()-3) == ".so") {
+        if (name.size() > 3 && name.substr(name.size() - 3) == ".so")
+        {
             std::string fullpath = dirPath + "/" + name;
-            void* handle = dlopen(fullpath.c_str(), RTLD_NOW | RTLD_LOCAL);
-            if (!handle) {
-                if (logger) logger->log(LogLevel::Error, std::string("dlopen failed for ") + fullpath + ": " + dlerror());
+            void *handle = dlopen(fullpath.c_str(), RTLD_NOW | RTLD_LOCAL);
+            if (!handle)
+            {
+                if (logger)
+                    logger->log(LogLevel::Error, std::string("dlopen failed for ") + fullpath + ": " + dlerror());
                 continue;
             }
 
-            using start_fn_t = int(*)(const HostAPI*, const char*);
-            using stop_fn_t = void(*)();
+            using start_fn_t = int (*)(const HostAPI *, const char *);
+            using stop_fn_t = void (*)();
 
             dlerror(); // clear
             start_fn_t start = reinterpret_cast<start_fn_t>(dlsym(handle, "plugin_start"));
-            const char* dlsym_err = dlerror();
-            if (dlsym_err || !start) {
-                if (logger) logger->log(LogLevel::Warn, std::string("plugin_start not found in ") + fullpath);
+            const char *dlsym_err = dlerror();
+            if (dlsym_err || !start)
+            {
+                if (logger)
+                    logger->log(LogLevel::Warn, std::string("plugin_start not found in ") + fullpath);
                 dlclose(handle);
                 continue;
             }
@@ -626,12 +661,15 @@ int Server::loadPluginsFromDirectory(const std::string& dirPath) {
             // stop may be optional; still allow plugin to load
 
             // Use file base name (without .so) as moduleId
-            std::string moduleId = name.substr(0, name.size()-3);
+            std::string moduleId = name.substr(0, name.size() - 3);
 
             int rc = start(&hostApi, moduleId.c_str());
-            if (rc != 0) {
-                if (logger) logger->log(LogLevel::Warn, std::string("plugin_start failed for ") + fullpath);
-                if (stop) stop();
+            if (rc != 0)
+            {
+                if (logger)
+                    logger->log(LogLevel::Warn, std::string("plugin_start failed for ") + fullpath);
+                if (stop)
+                    stop();
                 dlclose(handle);
                 continue;
             }
@@ -643,7 +681,8 @@ int Server::loadPluginsFromDirectory(const std::string& dirPath) {
             entry.moduleId = moduleId;
             loadedPlugins.push_back(entry);
             ++loaded;
-            if (logger) logger->log(LogLevel::Info, std::string("Loaded plugin: ") + fullpath + " as moduleId=" + moduleId);
+            if (logger)
+                logger->log(LogLevel::Info, std::string("Loaded plugin: ") + fullpath + " as moduleId=" + moduleId);
         }
     }
 
@@ -652,30 +691,43 @@ int Server::loadPluginsFromDirectory(const std::string& dirPath) {
 }
 
 // After initializeHandlers registration, expose endpoints to get/set enabled plugins
-    
 
-void Server::unloadPlugins() {
+void Server::unloadPlugins()
+{
     // Unregister and dlclose in reverse order
-    for (auto it = loadedPlugins.rbegin(); it != loadedPlugins.rend(); ++it) {
-        if (it->stopFn) {
-            try { it->stopFn(); } catch (...) {}
+    for (auto it = loadedPlugins.rbegin(); it != loadedPlugins.rend(); ++it)
+    {
+        if (it->stopFn)
+        {
+            try
+            {
+                it->stopFn();
+            }
+            catch (...)
+            {
+            }
         }
-        if (it->handle) {
+        if (it->handle)
+        {
             dlclose(it->handle);
             it->handle = nullptr;
         }
-        if (logger) logger->log(LogLevel::Info, std::string("Unloaded plugin: ") + it->path);
+        if (logger)
+            logger->log(LogLevel::Info, std::string("Unloaded plugin: ") + it->path);
     }
     loadedPlugins.clear();
 }
 
-void Server::registerEndpoint(const std::string& endpoint, std::function<std::string(const std::string&)> handler) {
+void Server::registerEndpoint(const std::string &endpoint, std::function<std::string(const std::string &)> handler)
+{
     endpointHandlers[endpoint] = handler;
 }
 
-void Server::run() {
+void Server::run()
+{
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_fd == -1) {
+    if (server_fd == -1)
+    {
         throw std::runtime_error("Failed to create socket");
     }
 
@@ -684,65 +736,83 @@ void Server::run() {
     address.sin_addr.s_addr = htonl(INADDR_ANY);
     address.sin_port = htons(port);
 
-    if (bind(server_fd, (struct sockaddr*)&address, sizeof(address)) < 0) {
+    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0)
+    {
         close(server_fd);
         throw std::runtime_error("Failed to bind socket");
     }
 
-    if (listen(server_fd, 3) < 0) {
+    if (listen(server_fd, 3) < 0)
+    {
         close(server_fd);
         throw std::runtime_error("Failed to listen on socket");
     }
 
-    while (running) {
+    while (running)
+    {
         sockaddr_in client_address;
         socklen_t client_len = sizeof(client_address);
-        int client_fd = accept(server_fd, (struct sockaddr*)&client_address, &client_len);
-        if (client_fd < 0) {
-            if (running && logger) {
+        int client_fd = accept(server_fd, (struct sockaddr *)&client_address, &client_len);
+        if (client_fd < 0)
+        {
+            if (running && logger)
+            {
                 logger->log(LogLevel::Error, "Failed to accept connection");
             }
             continue;
         }
 
-        if (logger) logger->log(LogLevel::Info, std::string("New client accepted from ") + inet_ntoa(client_address.sin_addr) + ":" + std::to_string(ntohs(client_address.sin_port)));
+        if (logger)
+            logger->log(LogLevel::Info, std::string("New client accepted from ") + inet_ntoa(client_address.sin_addr) + ":" + std::to_string(ntohs(client_address.sin_port)));
 
         // Read the full request (handle large payloads)
         std::string request;
         char buffer[4096] = {0};
         int bytes_read;
-        
-        while ((bytes_read = read(client_fd, buffer, sizeof(buffer) - 1)) > 0) {
+
+        while ((bytes_read = read(client_fd, buffer, sizeof(buffer) - 1)) > 0)
+        {
             request.append(buffer, bytes_read);
             // Check if we've read the complete request
-            if (request.find("\r\n\r\n") != std::string::npos || request.find("\n\n") != std::string::npos) {
+            if (request.find("\r\n\r\n") != std::string::npos || request.find("\n\n") != std::string::npos)
+            {
                 // Check if Content-Length header exists and if we've read enough
                 size_t clPos = request.find("Content-Length:");
-                if (clPos != std::string::npos) {
+                if (clPos != std::string::npos)
+                {
                     size_t clEnd = request.find("\r\n", clPos);
-                    if (clEnd == std::string::npos) clEnd = request.find("\n", clPos);
-                    if (clEnd != std::string::npos) {
+                    if (clEnd == std::string::npos)
+                        clEnd = request.find("\n", clPos);
+                    if (clEnd != std::string::npos)
+                    {
                         int contentLength = std::atoi(request.substr(clPos + 15, clEnd - clPos - 15).c_str());
                         size_t bodyStart = request.find("\r\n\r\n");
-                        if (bodyStart == std::string::npos) bodyStart = request.find("\n\n");
-                        if (bodyStart != std::string::npos) {
+                        if (bodyStart == std::string::npos)
+                            bodyStart = request.find("\n\n");
+                        if (bodyStart != std::string::npos)
+                        {
                             bodyStart += (request[bodyStart + 2] == '\n' ? 2 : 4);
                             int currentBodySize = request.size() - bodyStart;
-                            if (currentBodySize >= contentLength) {
+                            if (currentBodySize >= contentLength)
+                            {
                                 break; // Got full body
                             }
                         }
                     }
-                } else {
+                }
+                else
+                {
                     // No Content-Length, assume request is complete
                     break;
                 }
             }
             std::memset(buffer, 0, sizeof(buffer));
         }
-        
-        if (!request.empty()) {
-            if (logger) logger->log(LogLevel::Debug, "Received request: " + request);
+
+        if (!request.empty())
+        {
+            if (logger)
+                logger->log(LogLevel::Debug, "Received request: " + request);
             std::string response = handleRequest(request);
             send(client_fd, response.c_str(), response.size(), 0);
         }
@@ -752,36 +822,60 @@ void Server::run() {
     close(server_fd);
 }
 
-std::string Server::handleRequest(const std::string& request) {
+std::string Server::handleRequest(const std::string &request)
+{
     std::istringstream requestStream(request);
     std::string method, path;
     requestStream >> method >> path;
 
-    for (const auto& [endpoint, handler] : endpointHandlers) {
+    // Handle CORS preflight OPTIONS requests
+    if (method == "OPTIONS")
+    {
+        std::ostringstream response;
+        response << "HTTP/1.1 204 No Content\r\n";
+        response << "Access-Control-Allow-Origin: *\r\n";
+        response << "Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS\r\n";
+        response << "Access-Control-Allow-Headers: Content-Type, Authorization\r\n";
+        response << "Access-Control-Max-Age: 86400\r\n";
+        response << "Connection: close\r\n";
+        response << "\r\n";
+        return response.str();
+    }
+
+    for (const auto &[endpoint, handler] : endpointHandlers)
+    {
         auto spacePos = endpoint.find(' ');
-        if (spacePos == std::string::npos) continue;
+        if (spacePos == std::string::npos)
+            continue;
         std::string endpointMethod = endpoint.substr(0, spacePos);
         std::string endpointPath = endpoint.substr(spacePos + 1);
 
-        if (endpointMethod != method) continue; // method must match exactly
+        if (endpointMethod != method)
+            continue; // method must match exactly
 
         std::string endpointPattern = endpointPath;
         size_t pos;
-        while ((pos = endpointPattern.find("{")) != std::string::npos) {
+        while ((pos = endpointPattern.find("{")) != std::string::npos)
+        {
             size_t endPos = endpointPattern.find("}", pos);
-            if (endPos != std::string::npos) {
+            if (endPos != std::string::npos)
+            {
                 endpointPattern.replace(pos, endPos - pos + 1, "[^/]+");
             }
         }
 
         // Use regex to match the path only (not the method)
         std::regex pattern(endpointPattern);
-        if (std::regex_match(path, pattern)) {
+        if (std::regex_match(path, pattern))
+        {
             std::string body = handler(request);
             std::ostringstream response;
             response << "HTTP/1.1 200 OK\r\n";
-            response << "Content-Type: text/plain\r\n";
+            response << "Content-Type: application/json\r\n";
             response << "Content-Length: " << body.size() << "\r\n";
+            response << "Access-Control-Allow-Origin: *\r\n";
+            response << "Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS\r\n";
+            response << "Access-Control-Allow-Headers: Content-Type, Authorization\r\n";
             response << "Connection: close\r\n";
             response << "\r\n";
             response << body;
@@ -792,11 +886,13 @@ std::string Server::handleRequest(const std::string& request) {
     // Default to 404 if no match is found
     std::ostringstream response;
     response << "HTTP/1.1 404 Not Found\r\n";
-    response << "Content-Type: text/plain\r\n";
+    response << "Content-Type: application/json\r\n";
     response << "Content-Length: 13\r\n";
+    response << "Access-Control-Allow-Origin: *\r\n";
+    response << "Access-Control-Allow-Methods: GET, POST, PATCH, DELETE, OPTIONS\r\n";
+    response << "Access-Control-Allow-Headers: Content-Type, Authorization\r\n";
     response << "Connection: close\r\n";
     response << "\r\n";
     response << "404 Not Found";
     return response.str();
 }
-

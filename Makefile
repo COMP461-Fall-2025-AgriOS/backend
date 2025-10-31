@@ -53,6 +53,7 @@ $(BUILD_DIR)_dir:
 
 clean:
 	@-rm -rf $(BUILD_DIR) $(TARGET)
+	@-rm -f core.*
 	@for d in $(PLUGIN_EXAMPLES); do \
 		if [ -d "$$d" ]; then $(MAKE) -C $$d clean; fi; \
 	done
