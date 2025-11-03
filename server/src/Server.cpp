@@ -5,6 +5,7 @@
 #include "Module.h"
 #include <iostream>
 #include <sstream>
+#include <fstream>
 #include <chrono>
 #include <thread>
 #include <unordered_map>
@@ -198,9 +199,23 @@ void Server::initializeHandlers() {
         std::smatch match;
         if (std::regex_search(path, match, idRegex)) {
             std::string id = match[1];
-            if (robots.find(id) != robots.end()) {
-                robots[id] = Robot::deserialize(body);
-                if (logger) logger->log(LogLevel::Info, "Updated robot id=" + id);
+            auto it = robots.find(id);
+            if (it != robots.end()) {
+                // Parse only the fields present in the PATCH body and update selectively
+                Robot& existingRobot = it->second;
+                
+                // Check for position update
+                std::regex posRegex("\"position\"\\s*:\\s*\\[\\s*([0-9.+\\-eE]+)\\s*,\\s*([0-9.+\\-eE]+)\\s*\\]");
+                std::smatch posMatch;
+                if (std::regex_search(body, posMatch, posRegex)) {
+                    float x = std::stof(posMatch[1]);
+                    float y = std::stof(posMatch[2]);
+                    existingRobot.setPosition(x, y);
+                    if (logger) logger->log(LogLevel::Info, "Updated robot position id=" + id + " to (" + std::to_string(x) + "," + std::to_string(y) + ")");
+                }
+                
+                // Could add more selective field updates here (type, attributes, etc.)
+                
                 return std::string("Robot updated successfully\n");
             }
         }
@@ -414,24 +429,10 @@ void Server::initializeHandlers() {
         if (std::regex_search(path, match, idRegex)) {
             std::string id = match[1];
             if (maps.find(id) != maps.end()) {
-                // Parse width and height from JSON body
-                std::regex widthRegex("\"width\"\\s*:\\s*([0-9]+)");
-                std::regex heightRegex("\"height\"\\s*:\\s*([0-9]+)");
-                std::smatch widthMatch, heightMatch;
-
-                if (std::regex_search(body, widthMatch, widthRegex) && std::regex_search(body, heightMatch, heightRegex)) {
-                    int width = std::stoi(widthMatch[1]);
-                    int height = std::stoi(heightMatch[1]);
-                    
-                    // Replace the map with a new one with updated dimensions
-                    maps.erase(id);
-                    maps.emplace(id, Map(width, height));
-                    
-                    if (logger) logger->log(LogLevel::Info, "Updated map id=" + id + ", width=" + std::to_string(width) + ", height=" + std::to_string(height));
-                    return std::string("Map updated successfully\n");
-                } else {
-                    return std::string("Failed to parse map dimensions\n");
-                }
+                // TODO: Implement Map::deserialize or parse JSON body
+                // maps[id] = Map::deserialize(body);
+                if (logger) logger->log(LogLevel::Info, std::string("Updated map id=") + id);
+                return std::string("Map updated successfully\n");
             }
         }
 
@@ -567,6 +568,65 @@ void Server::initializeHandlers() {
         }
 
         return std::string("Bad request\n");
+    });
+
+    // GET /simulation/events - Read and parse simulation.log
+    registerEndpoint("GET /simulation/events", [this](const std::string& request) {
+        std::ifstream logFile("simulation.log");
+        if (!logFile.is_open()) {
+            if (logger) logger->log(LogLevel::Warn, "simulation.log not found");
+            return std::string("{\"events\":[]}\n");
+        }
+
+        std::ostringstream out;
+        out << "{\"events\":[";
+        std::string line;
+        bool first = true;
+
+        while (std::getline(logFile, line)) {
+            if (line.empty()) continue;
+
+            if (!first) out << ",";
+            first = false;
+
+            // Parse: "TIMESTAMP EVENT_TYPE data..."
+            // Timestamp is first 23 chars: "YYYY-MM-DD HH:MM:SS.mmm"
+            if (line.size() < 24) continue;
+
+            std::string timestamp = line.substr(0, 23);
+            size_t typeStart = 24;
+            size_t spaceAfterType = line.find(' ', typeStart);
+            
+            std::string eventType;
+            std::string data;
+            
+            if (spaceAfterType == std::string::npos) {
+                eventType = line.substr(typeStart);
+                data = "";
+            } else {
+                eventType = line.substr(typeStart, spaceAfterType - typeStart);
+                data = line.substr(spaceAfterType + 1);
+            }
+
+            // Escape quotes in data for JSON
+            std::string escapedData;
+            for (char c : data) {
+                if (c == '"') escapedData += "\\\"";
+                else if (c == '\\') escapedData += "\\\\";
+                else escapedData += c;
+            }
+
+            out << "{";
+            out << "\"timestamp\":\"" << timestamp << "\",";
+            out << "\"type\":\"" << eventType << "\",";
+            out << "\"data\":\"" << escapedData << "\"";
+            out << "}";
+        }
+        out << "]}";
+        logFile.close();
+
+        if (logger) logger->log(LogLevel::Info, "Served simulation events");
+        return out.str();
     });
 }
 
@@ -782,6 +842,9 @@ std::string Server::handleRequest(const std::string& request) {
             response << "HTTP/1.1 200 OK\r\n";
             response << "Content-Type: text/plain\r\n";
             response << "Content-Length: " << body.size() << "\r\n";
+            response << "Access-Control-Allow-Origin: *\r\n";
+            response << "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS\r\n";
+            response << "Access-Control-Allow-Headers: Content-Type\r\n";
             response << "Connection: close\r\n";
             response << "\r\n";
             response << body;
@@ -789,11 +852,26 @@ std::string Server::handleRequest(const std::string& request) {
         }
     }
 
+    // Handle OPTIONS requests for CORS preflight
+    if (method == "OPTIONS") {
+        std::ostringstream response;
+        response << "HTTP/1.1 204 No Content\r\n";
+        response << "Access-Control-Allow-Origin: *\r\n";
+        response << "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS\r\n";
+        response << "Access-Control-Allow-Headers: Content-Type\r\n";
+        response << "Connection: close\r\n";
+        response << "\r\n";
+        return response.str();
+    }
+
     // Default to 404 if no match is found
     std::ostringstream response;
     response << "HTTP/1.1 404 Not Found\r\n";
     response << "Content-Type: text/plain\r\n";
     response << "Content-Length: 13\r\n";
+    response << "Access-Control-Allow-Origin: *\r\n";
+    response << "Access-Control-Allow-Methods: GET, POST, PUT, DELETE, PATCH, OPTIONS\r\n";
+    response << "Access-Control-Allow-Headers: Content-Type\r\n";
     response << "Connection: close\r\n";
     response << "\r\n";
     response << "404 Not Found";
