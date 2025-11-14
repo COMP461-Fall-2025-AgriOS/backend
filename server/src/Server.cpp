@@ -56,9 +56,23 @@ Server::Server(int port) : port(port), running(false) {
     hostApi.register_callback = &host_register_impl;
     hostApi.unregister_callback = &host_unregister_impl;
     hostApi.log = &host_log_impl;
+    
+    // Set user plugins directory and create if needed
+    userPluginsDirectory = "./plugins/user";
+    system(("mkdir -p " + userPluginsDirectory).c_str());
 }
 
-Server::Server(int port, std::unique_ptr<Logger> inLogger) : port(port), running(false), logger(std::move(inLogger)) {}
+Server::Server(int port, std::unique_ptr<Logger> inLogger) : port(port), running(false), logger(std::move(inLogger)) {
+    // prepare host API
+    hostApi.host_ctx = this;
+    hostApi.register_callback = &host_register_impl;
+    hostApi.unregister_callback = &host_unregister_impl;
+    hostApi.log = &host_log_impl;
+    
+    // Set user plugins directory and create if needed
+    userPluginsDirectory = "./plugins/user";
+    system(("mkdir -p " + userPluginsDirectory).c_str());
+}
 
 Server::~Server() {
     stop();
@@ -88,11 +102,13 @@ void Server::initializeHandlers() {
     registerEndpoint("GET /plugins", [this](const std::string& request) {
         std::ostringstream out;
         out << "[";
+        bool first = true;
+        
+        // Scan main plugins directory
         if (!pluginsDirectory.empty()) {
             DIR* dir = opendir(pluginsDirectory.c_str());
             if (dir) {
                 struct dirent* ent;
-                bool first = true;
                 while ((ent = readdir(dir)) != nullptr) {
                     std::string name = ent->d_name;
                     if (name.size() > 3 && name.substr(name.size()-3) == ".so") {
@@ -105,6 +121,23 @@ void Server::initializeHandlers() {
                 closedir(dir);
             }
         }
+        
+        // Scan user plugins directory
+        DIR* userDir = opendir(userPluginsDirectory.c_str());
+        if (userDir) {
+            struct dirent* ent;
+            while ((ent = readdir(userDir)) != nullptr) {
+                std::string name = ent->d_name;
+                if (name.size() > 3 && name.substr(name.size()-3) == ".so") {
+                    std::string id = name.substr(0, name.size()-3);
+                    if (!first) out << ",";
+                    out << '"' << id << '"';
+                    first = false;
+                }
+            }
+            closedir(userDir);
+        }
+        
         out << "]";
         return out.str();
     });
@@ -156,6 +189,192 @@ void Server::initializeHandlers() {
             return ok ? std::string("Invoked\n") : std::string("Plugin not found\n");
         }
         return std::string("Bad request\n");
+    });
+
+    // Get plugin template
+    registerEndpoint("GET /plugins/template", [this](const std::string& request) {
+        std::string templateCode = 
+            "#include \"plugins/PluginAPI.h\"\n"
+            "#include <string>\n"
+            "#include <cstring>\n\n"
+            "static const HostAPI* g_api = nullptr;\n"
+            "static std::string g_moduleId;\n\n"
+            "static void plugin_callback(const char* context) {\n"
+            "    const char* ctx = context ? context : \"\";\n"
+            "    // TODO: Implement your plugin logic here\n"
+            "    if (g_api && g_api->log) {\n"
+            "        g_api->log(g_api->host_ctx, 0, \n"
+            "            (std::string(\"Plugin: \") + g_moduleId + \" invoked with ctx=\" + ctx).c_str());\n"
+            "    }\n"
+            "}\n\n"
+            "extern \"C\" int plugin_start(const HostAPI* api, const char* moduleId) {\n"
+            "    if (!api || !moduleId) return -1;\n"
+            "    g_api = api;\n"
+            "    g_moduleId = moduleId;\n"
+            "    if (g_api->register_callback) {\n"
+            "        g_api->register_callback(g_api->host_ctx, g_moduleId.c_str(), &plugin_callback);\n"
+            "    }\n"
+            "    if (g_api->log) {\n"
+            "        g_api->log(g_api->host_ctx, 0, \n"
+            "            (std::string(\"Plugin started: \") + g_moduleId).c_str());\n"
+            "    }\n"
+            "    return 0;\n"
+            "}\n\n"
+            "extern \"C\" void plugin_stop() {\n"
+            "    if (g_api && g_api->unregister_callback) {\n"
+            "        g_api->unregister_callback(g_api->host_ctx, g_moduleId.c_str());\n"
+            "    }\n"
+            "    if (g_api && g_api->log) {\n"
+            "        g_api->log(g_api->host_ctx, 0, \n"
+            "            (std::string(\"Plugin stopped: \") + g_moduleId).c_str());\n"
+            "    }\n"
+            "    g_moduleId.clear();\n"
+            "    g_api = nullptr;\n"
+            "}\n";
+        return templateCode;
+    });
+
+    // Get plugin source code
+    registerEndpoint("GET /plugins/{id}/source", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+        std::regex idRegex("/plugins/([^/]+)/source");
+        std::smatch match;
+        if (std::regex_search(path, match, idRegex)) {
+            std::string id = match[1];
+            std::string source = readPluginSource(id);
+            if (source.empty()) {
+                // Return empty body - frontend will treat this as no source
+                return std::string("");
+            }
+            return source;
+        }
+        return std::string("");
+    });
+
+    // Save plugin source code
+    registerEndpoint("POST /plugins/{id}/source", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+        std::string body = extractBody(request);
+        std::regex idRegex("/plugins/([^/]+)/source");
+        std::smatch match;
+        if (std::regex_search(path, match, idRegex)) {
+            std::string id = match[1];
+            bool success = savePluginSource(id, body);
+            if (success) {
+                if (logger) logger->log(LogLevel::Info, "Saved source for plugin: " + id);
+                return std::string("Source saved successfully\n");
+            } else {
+                return std::string("HTTP/1.1 500 Internal Server Error\r\n\r\nFailed to save source");
+            }
+        }
+        return std::string("HTTP/1.1 400 Bad Request\r\n\r\nBad request");
+    });
+
+    // Compile plugin
+    registerEndpoint("POST /plugins/{id}/compile", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+        std::string body = extractBody(request);
+        std::regex idRegex("/plugins/([^/]+)/compile");
+        std::smatch match;
+        if (std::regex_search(path, match, idRegex)) {
+            std::string id = match[1];
+            std::string result = compilePlugin(id, body);
+            return result;
+        }
+        return std::string("HTTP/1.1 400 Bad Request\r\n\r\nBad request");
+    });
+
+    // Hot-load plugin
+    registerEndpoint("POST /plugins/{id}/reload", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+        std::regex idRegex("/plugins/([^/]+)/reload");
+        std::smatch match;
+        if (std::regex_search(path, match, idRegex)) {
+            std::string id = match[1];
+            bool success = hotLoadPlugin(id);
+            if (success) {
+                if (logger) logger->log(LogLevel::Info, "Hot-loaded plugin: " + id);
+                return std::string("Plugin loaded successfully\n");
+            } else {
+                return std::string("HTTP/1.1 500 Internal Server Error\r\n\r\nFailed to load plugin");
+            }
+        }
+        return std::string("HTTP/1.1 400 Bad Request\r\n\r\nBad request");
+    });
+
+    // Delete plugin
+    registerEndpoint("DELETE /plugins/{id}", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+        std::regex idRegex("/plugins/([^/]+)$");
+        std::smatch match;
+        if (std::regex_search(path, match, idRegex)) {
+            std::string id = match[1];
+            // Unload if loaded
+            unloadSinglePlugin(id);
+            // Delete files
+            std::string sourcePath = userPluginsDirectory + "/" + id + ".cpp";
+            std::string soPath = userPluginsDirectory + "/" + id + ".so";
+            bool removed = false;
+            if (std::remove(sourcePath.c_str()) == 0) removed = true;
+            if (std::remove(soPath.c_str()) == 0) removed = true;
+            if (removed) {
+                if (logger) logger->log(LogLevel::Info, "Deleted plugin: " + id);
+                return std::string("Plugin deleted successfully\n");
+            } else {
+                return std::string("HTTP/1.1 404 Not Found\r\n\r\nPlugin not found");
+            }
+        }
+        return std::string("HTTP/1.1 400 Bad Request\r\n\r\nBad request");
+    });
+
+    // Upload plugin (.so file)
+    registerEndpoint("POST /plugins/upload", [this](const std::string& request) {
+        if (logger) logger->log(LogLevel::Debug, "Upload request received, size: " + std::to_string(request.size()));
+        
+        std::string filename;
+        std::string fileData = extractMultipartFile(request, filename);
+        
+        if (logger) {
+            logger->log(LogLevel::Debug, "Extracted filename: " + (filename.empty() ? "<empty>" : filename));
+            logger->log(LogLevel::Debug, "Extracted file data size: " + std::to_string(fileData.size()));
+        }
+        
+        if (fileData.empty() || filename.empty()) {
+            if (logger) logger->log(LogLevel::Warn, "Upload failed: empty file data or filename");
+            return std::string("HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 35\r\n\r\n{\"error\":\"No file uploaded\"}");
+        }
+        
+        // Extract moduleId from filename (remove .so extension)
+        std::string moduleId = filename;
+        if (moduleId.size() > 3 && moduleId.substr(moduleId.size()-3) == ".so") {
+            moduleId = moduleId.substr(0, moduleId.size()-3);
+        }
+        
+        // Save to user plugins directory
+        std::string destPath = userPluginsDirectory + "/" + filename;
+        std::ofstream outFile(destPath, std::ios::binary);
+        if (!outFile) {
+            if (logger) logger->log(LogLevel::Error, "Failed to open file for writing: " + destPath);
+            return std::string("HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: 33\r\n\r\n{\"error\":\"Failed to save file\"}");
+        }
+        outFile.write(fileData.c_str(), fileData.size());
+        outFile.close();
+        
+        if (logger) logger->log(LogLevel::Info, "Uploaded plugin: " + filename + " (" + std::to_string(fileData.size()) + " bytes)");
+        
+        std::string responseBody = "{\"success\":true,\"moduleId\":\"" + moduleId + "\"}";
+        std::string response = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + std::to_string(responseBody.size()) + "\r\n\r\n" + responseBody;
+        return response;
     });
 
     registerEndpoint("POST /robots/{id}", [this](const std::string& request) {
@@ -729,6 +948,286 @@ void Server::unloadPlugins() {
     loadedPlugins.clear();
 }
 
+std::string Server::readPluginSource(const std::string& moduleId) {
+    std::string sourcePath = userPluginsDirectory + "/" + moduleId + ".cpp";
+    std::ifstream inFile(sourcePath);
+    if (!inFile) {
+        return "";
+    }
+    std::string content((std::istreambuf_iterator<char>(inFile)), std::istreambuf_iterator<char>());
+    return content;
+}
+
+bool Server::savePluginSource(const std::string& moduleId, const std::string& source) {
+    std::string sourcePath = userPluginsDirectory + "/" + moduleId + ".cpp";
+    std::ofstream outFile(sourcePath);
+    if (!outFile) {
+        return false;
+    }
+    outFile << source;
+    outFile.close();
+    return true;
+}
+
+std::string Server::compilePlugin(const std::string& moduleId, const std::string& sourceCode) {
+    // Save source code first
+    if (!savePluginSource(moduleId, sourceCode)) {
+        return "{\"success\":false,\"output\":\"\",\"errors\":\"Failed to save source file\"}";
+    }
+    
+    std::string sourcePath = userPluginsDirectory + "/" + moduleId + ".cpp";
+    std::string outputPath = userPluginsDirectory + "/" + moduleId + ".so";
+    
+    // Build compilation command
+    std::ostringstream cmd;
+    cmd << "g++ -I" << pluginsDirectory << "/.. "
+        << "-fPIC -Wall -O2 -std=c++17 -shared "
+        << "-o " << outputPath << " "
+        << sourcePath << " 2>&1";
+    
+    std::string command = cmd.str();
+    
+    if (logger) logger->log(LogLevel::Info, "Compiling plugin: " + command);
+    
+    // Execute compilation
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe) {
+        return "{\"success\":false,\"output\":\"\",\"errors\":\"Failed to execute compiler\"}";
+    }
+    
+    std::string compileOutput;
+    char buffer[256];
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        compileOutput += buffer;
+    }
+    
+    int returnCode = pclose(pipe);
+    
+    // Escape JSON special characters
+    std::string escapedOutput;
+    for (char c : compileOutput) {
+        if (c == '"') escapedOutput += "\\\"";
+        else if (c == '\\') escapedOutput += "\\\\";
+        else if (c == '\n') escapedOutput += "\\n";
+        else if (c == '\r') escapedOutput += "\\r";
+        else if (c == '\t') escapedOutput += "\\t";
+        else escapedOutput += c;
+    }
+    
+    std::ostringstream result;
+    result << "{\"success\":" << (returnCode == 0 ? "true" : "false")
+           << ",\"output\":\"" << escapedOutput << "\""
+           << ",\"errors\":\"" << (returnCode != 0 ? escapedOutput : "") << "\"}";
+    
+    return result.str();
+}
+
+bool Server::hotLoadPlugin(const std::string& moduleId) {
+    // First, unload if already loaded
+    unloadSinglePlugin(moduleId);
+    
+    std::string pluginPath = userPluginsDirectory + "/" + moduleId + ".so";
+    
+    // Check if file exists
+    std::ifstream checkFile(pluginPath);
+    if (!checkFile.good()) {
+        if (logger) logger->log(LogLevel::Error, "Plugin file not found: " + pluginPath);
+        return false;
+    }
+    checkFile.close();
+    
+    // Load plugin using dlopen
+    void* handle = dlopen(pluginPath.c_str(), RTLD_NOW | RTLD_LOCAL);
+    if (!handle) {
+        if (logger) logger->log(LogLevel::Error, std::string("dlopen failed for ") + pluginPath + ": " + dlerror());
+        return false;
+    }
+    
+    using start_fn_t = int(*)(const HostAPI*, const char*);
+    using stop_fn_t = void(*)();
+    
+    dlerror(); // clear
+    start_fn_t start = reinterpret_cast<start_fn_t>(dlsym(handle, "plugin_start"));
+    const char* dlsym_err = dlerror();
+    if (dlsym_err || !start) {
+        if (logger) logger->log(LogLevel::Warn, std::string("plugin_start not found in ") + pluginPath);
+        dlclose(handle);
+        return false;
+    }
+    
+    stop_fn_t stop = reinterpret_cast<stop_fn_t>(dlsym(handle, "plugin_stop"));
+    
+    int rc = start(&hostApi, moduleId.c_str());
+    if (rc != 0) {
+        if (logger) logger->log(LogLevel::Warn, std::string("plugin_start failed for ") + pluginPath);
+        if (stop) stop();
+        dlclose(handle);
+        return false;
+    }
+    
+    PluginEntry entry;
+    entry.handle = handle;
+    entry.stopFn = stop;
+    entry.path = pluginPath;
+    entry.moduleId = moduleId;
+    loadedPlugins.push_back(entry);
+    
+    if (logger) logger->log(LogLevel::Info, std::string("Hot-loaded plugin: ") + pluginPath);
+    return true;
+}
+
+bool Server::unloadSinglePlugin(const std::string& moduleId) {
+    auto it = std::find_if(loadedPlugins.begin(), loadedPlugins.end(),
+                          [&moduleId](const PluginEntry& entry) {
+                              return entry.moduleId == moduleId;
+                          });
+    
+    if (it != loadedPlugins.end()) {
+        if (it->stopFn) {
+            try { it->stopFn(); } catch (...) {}
+        }
+        if (it->handle) {
+            dlclose(it->handle);
+            it->handle = nullptr;
+        }
+        if (logger) logger->log(LogLevel::Info, std::string("Unloaded plugin: ") + it->path);
+        loadedPlugins.erase(it);
+        return true;
+    }
+    return false;
+}
+
+std::string Server::extractMultipartFile(const std::string& request, std::string& filename) {
+    // Parse multipart/form-data
+    // Find boundary in Content-Type header
+    size_t contentTypePos = request.find("Content-Type:");
+    if (contentTypePos == std::string::npos) {
+        return "";
+    }
+    
+    size_t boundaryPos = request.find("boundary=", contentTypePos);
+    if (boundaryPos == std::string::npos) {
+        return "";
+    }
+    
+    boundaryPos += 9; // skip "boundary="
+    // Skip any whitespace or quotes
+    while (boundaryPos < request.size() && (request[boundaryPos] == ' ' || request[boundaryPos] == '"')) {
+        boundaryPos++;
+    }
+    
+    size_t boundaryEnd = boundaryPos;
+    while (boundaryEnd < request.size() && 
+           request[boundaryEnd] != '\r' && 
+           request[boundaryEnd] != '\n' && 
+           request[boundaryEnd] != ';' &&
+           request[boundaryEnd] != '"') {
+        boundaryEnd++;
+    }
+    
+    std::string boundaryValue = request.substr(boundaryPos, boundaryEnd - boundaryPos);
+    std::string boundary = "--" + boundaryValue;
+    
+    // Find filename
+    size_t filenamePos = request.find("filename=\"");
+    if (filenamePos == std::string::npos) {
+        // Try without quotes
+        filenamePos = request.find("filename=");
+        if (filenamePos != std::string::npos) {
+            filenamePos += 9; // skip "filename="
+            size_t filenameEnd = filenamePos;
+            while (filenameEnd < request.size() && 
+                   request[filenameEnd] != '\r' && 
+                   request[filenameEnd] != '\n' &&
+                   request[filenameEnd] != ';') {
+                filenameEnd++;
+            }
+            filename = request.substr(filenamePos, filenameEnd - filenamePos);
+            // Remove quotes if present
+            if (filename.size() >= 2 && filename[0] == '"' && filename[filename.size()-1] == '"') {
+                filename = filename.substr(1, filename.size() - 2);
+            }
+        } else {
+            return "";
+        }
+    } else {
+        filenamePos += 10; // skip 'filename="'
+        size_t filenameEnd = request.find("\"", filenamePos);
+        if (filenameEnd == std::string::npos) {
+            return "";
+        }
+        filename = request.substr(filenamePos, filenameEnd - filenamePos);
+    }
+    
+    // Find file data (after \r\n\r\n following the headers)
+    size_t dataStart = request.find("\r\n\r\n");
+    if (dataStart == std::string::npos) {
+        dataStart = request.find("\n\n");
+        if (dataStart == std::string::npos) {
+            return "";
+        }
+        dataStart += 2;
+    } else {
+        dataStart += 4;
+    }
+    
+    // Find end boundary - search from the end backwards to avoid false matches in binary data
+    // First, try to find the closing boundary (with -- at end, which marks the end of multipart)
+    size_t dataEnd = request.find(boundary + "--", dataStart);
+    if (dataEnd == std::string::npos) {
+        // If no closing boundary, look for the next part boundary
+        // Search from near the end to avoid false matches in binary data
+        size_t searchStart = dataStart;
+        size_t searchEnd = request.size();
+        
+        // For binary files, search backwards from the end
+        // But we need to be careful - search for boundary preceded by \r\n
+        std::string boundaryMarker = "\r\n" + boundary;
+        dataEnd = request.find(boundaryMarker, searchStart);
+        if (dataEnd == std::string::npos) {
+            // Try with just \n
+            boundaryMarker = "\n" + boundary;
+            dataEnd = request.find(boundaryMarker, searchStart);
+        }
+        
+        if (dataEnd == std::string::npos) {
+            // Last resort: search for boundary at start of line
+            // This is less reliable for binary data but might work
+            dataEnd = request.find(boundary, searchStart);
+            if (dataEnd != std::string::npos) {
+                // Verify it's at start of line (preceded by \r\n or \n)
+                if (dataEnd > 0 && request[dataEnd-1] != '\n' && request[dataEnd-1] != '\r') {
+                    // False match, search again from after this position
+                    dataEnd = request.find(boundary, dataEnd + 1);
+                }
+            }
+        } else {
+            // Found boundary marker, adjust position
+            dataEnd += (boundaryMarker[0] == '\r' ? 2 : 1);
+        }
+        
+        if (dataEnd == std::string::npos) {
+            // If still not found, the request might be incomplete or malformed
+            // Return empty to indicate failure
+            return "";
+        }
+    }
+    
+    // Back up to remove trailing \r\n before boundary
+    if (dataEnd >= 2 && request[dataEnd-2] == '\r' && request[dataEnd-1] == '\n') {
+        dataEnd -= 2;
+    } else if (dataEnd >= 1 && request[dataEnd-1] == '\n') {
+        dataEnd -= 1;
+    }
+    
+    // Ensure we don't have a negative size
+    if (dataEnd <= dataStart) {
+        return "";
+    }
+    
+    return request.substr(dataStart, dataEnd - dataStart);
+}
+
 void Server::registerEndpoint(const std::string& endpoint, std::function<std::string(const std::string&)> handler) {
     endpointHandlers[endpoint] = handler;
 }
@@ -771,33 +1270,86 @@ void Server::run() {
         std::string request;
         char buffer[4096] = {0};
         int bytes_read;
+        int contentLength = -1;
+        size_t bodyStart = 0;
         
         while ((bytes_read = read(client_fd, buffer, sizeof(buffer) - 1)) > 0) {
             request.append(buffer, bytes_read);
-            // Check if we've read the complete request
-            if (request.find("\r\n\r\n") != std::string::npos || request.find("\n\n") != std::string::npos) {
-                // Check if Content-Length header exists and if we've read enough
-                size_t clPos = request.find("Content-Length:");
-                if (clPos != std::string::npos) {
-                    size_t clEnd = request.find("\r\n", clPos);
-                    if (clEnd == std::string::npos) clEnd = request.find("\n", clPos);
-                    if (clEnd != std::string::npos) {
-                        int contentLength = std::atoi(request.substr(clPos + 15, clEnd - clPos - 15).c_str());
-                        size_t bodyStart = request.find("\r\n\r\n");
-                        if (bodyStart == std::string::npos) bodyStart = request.find("\n\n");
-                        if (bodyStart != std::string::npos) {
-                            bodyStart += (request[bodyStart + 2] == '\n' ? 2 : 4);
-                            int currentBodySize = request.size() - bodyStart;
-                            if (currentBodySize >= contentLength) {
-                                break; // Got full body
-                            }
-                        }
+            
+            // Check if we've read the headers
+            if (bodyStart == 0) {
+                bodyStart = request.find("\r\n\r\n");
+                if (bodyStart == std::string::npos) {
+                    bodyStart = request.find("\n\n");
+                    if (bodyStart != std::string::npos) {
+                        bodyStart += 2;
                     }
                 } else {
-                    // No Content-Length, assume request is complete
+                    bodyStart += 4;
+                }
+                
+                // Parse Content-Length header
+                if (bodyStart > 0) {
+                    size_t clPos = request.find("Content-Length:");
+                    if (clPos != std::string::npos && clPos < bodyStart) {
+                        size_t clValueStart = clPos + 15; // Skip "Content-Length:"
+                        // Skip whitespace
+                        while (clValueStart < request.size() && std::isspace(static_cast<unsigned char>(request[clValueStart]))) {
+                            clValueStart++;
+                        }
+                        size_t clEnd = request.find("\r\n", clValueStart);
+                        if (clEnd == std::string::npos) clEnd = request.find("\n", clValueStart);
+                        if (clEnd != std::string::npos) {
+                            std::string clStr = request.substr(clValueStart, clEnd - clValueStart);
+                            contentLength = std::atoi(clStr.c_str());
+                        }
+                    }
+                }
+            }
+            
+            // Check if we've read the complete body
+            if (contentLength >= 0 && bodyStart > 0) {
+                int currentBodySize = request.size() - bodyStart;
+                if (currentBodySize >= contentLength) {
+                    break; // Got full body based on Content-Length
+                }
+            } else if (bodyStart > 0 && contentLength < 0) {
+                // No Content-Length header - for multipart, read until closing boundary
+                size_t contentTypePos = request.find("Content-Type:");
+                if (contentTypePos != std::string::npos) {
+                    size_t multipartPos = request.find("multipart/form-data", contentTypePos);
+                    if (multipartPos != std::string::npos) {
+                        // Find boundary and check for closing marker
+                        size_t boundaryPos = request.find("boundary=", contentTypePos);
+                        if (boundaryPos != std::string::npos) {
+                            boundaryPos += 9;
+                            while (boundaryPos < request.size() && (request[boundaryPos] == ' ' || request[boundaryPos] == '"')) {
+                                boundaryPos++;
+                            }
+                            size_t boundaryEnd = boundaryPos;
+                            while (boundaryEnd < request.size() && 
+                                   request[boundaryEnd] != '\r' && 
+                                   request[boundaryEnd] != '\n' && 
+                                   request[boundaryEnd] != ';' &&
+                                   request[boundaryEnd] != '"') {
+                                boundaryEnd++;
+                            }
+                            std::string boundaryValue = request.substr(boundaryPos, boundaryEnd - boundaryPos);
+                            std::string closingBoundary = "--" + boundaryValue + "--";
+                            if (request.find(closingBoundary, bodyStart) != std::string::npos) {
+                                break; // Got full multipart body
+                            }
+                        }
+                    } else {
+                        // Not multipart, assume complete if we have headers
+                        break;
+                    }
+                } else {
+                    // No Content-Type, assume complete
                     break;
                 }
             }
+            
             std::memset(buffer, 0, sizeof(buffer));
         }
         

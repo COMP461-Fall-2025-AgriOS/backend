@@ -38,6 +38,14 @@ private:
 
     void unloadPlugins();
 
+    // Plugin management helper methods
+    std::string compilePlugin(const std::string& moduleId, const std::string& sourceCode);
+    bool hotLoadPlugin(const std::string& moduleId);
+    bool unloadSinglePlugin(const std::string& moduleId);
+    std::string readPluginSource(const std::string& moduleId);
+    bool savePluginSource(const std::string& moduleId, const std::string& source);
+    std::string extractMultipartFile(const std::string& request, std::string& filename);
+
 private:
     struct PluginEntry {
         void* handle = nullptr; // dlopen handle
@@ -53,4 +61,5 @@ private:
     void* hostCtx = nullptr;
 
     std::string pluginsDirectory;
+    std::string userPluginsDirectory;
 };
