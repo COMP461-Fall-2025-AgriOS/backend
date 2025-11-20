@@ -10,28 +10,32 @@ class Map
 private:
     int width;
     int height;
+    std::string name;
+    std::string mapUrl;
     std::vector<std::vector<int>> grid; // 0 = accessible, 1 = inaccessible
     std::vector<Robot> robots;
 
 public:
     // Constructor that takes width and height
-    Map(int width, int height);
-    
+    Map(int width, int height, const std::string &name, const std::string &mapUrl);
+
     // Getter methods
     int getWidth() const;
     int getHeight() const;
+    std::string getName() const;
+    std::string getMapUrl() const;
     std::vector<Robot> getRobots() const;
-    void addRobot(const Robot& robot);
-    void removeRobot(const Robot& robot);
-    
+    void addRobot(const Robot &robot);
+    void removeRobot(const Robot &robot);
+
     // Grid access methods
     int getCell(int x, int y) const;
     void setCell(int x, int y, int value);
-    
+
     // Utility methods
     bool isValidPosition(int x, int y) const;
     bool isAccessible(int x, int y) const;
-    
+
     // Initialize grid with all accessible cells (0s)
     void initializeEmpty();
     std::string serialize() const;
@@ -40,4 +44,3 @@ public:
 };
 
 #endif
-

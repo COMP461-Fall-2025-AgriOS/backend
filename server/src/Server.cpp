@@ -617,24 +617,32 @@ void Server::initializeHandlers() {
             
             std::regex widthRegex("\"width\"\\s*:\\s*([0-9]+)");
             std::regex heightRegex("\"height\"\\s*:\\s*([0-9]+)");
-            std::smatch widthMatch, heightMatch;
+            std::regex nameRegex("\"name\"\\s*:\\s*\"([^\"]+)\"");
+            std::regex mapUrlRegex("\"mapUrl\"\\s*:\\s*\"([^\"]+)\"");
+            std::smatch widthMatch, heightMatch, nameMatch, mapUrlMatch;
 
-            if (std::regex_search(body, widthMatch, widthRegex) && std::regex_search(body, heightMatch, heightRegex)) {
+            if (std::regex_search(body, widthMatch, widthRegex) && 
+                std::regex_search(body, heightMatch, heightRegex) &&
+                std::regex_search(body, nameMatch, nameRegex) &&
+                std::regex_search(body, mapUrlMatch, mapUrlRegex)) {
+                
                 int width = std::stoi(widthMatch[1]);
                 int height = std::stoi(heightMatch[1]);
+                std::string name = nameMatch[1];
+                std::string mapUrl = mapUrlMatch[1];
                 
-                maps.emplace(id, Map(width, height));
-                if (logger) logger->log(LogLevel::Info, "Created map with id=" + id + ", width=" + std::to_string(width) + ", height=" + std::to_string(height));
+                maps.emplace(id, Map(width, height, name, mapUrl));
+                
+                if (logger) logger->log(LogLevel::Info, "Created map with id=" + id + ", name=" + name + ", width=" + std::to_string(width) + ", height=" + std::to_string(height) + ", mapUrl=" + mapUrl);
 
                 return std::string("Map created successfully\n");
             } else {
-                return std::string("Failed to parse map dimensions\n");
+                return std::string("Failed to parse map data (missing required fields: width, height, name, mapUrl)\n");
             }
         }
 
         if (logger) logger->log(LogLevel::Warn, "Failed to create map (bad path)");
-        return std::string("Failed to create map\n");
-    });
+        return std::string("Failed to create map\n"); });
 
     registerEndpoint("PATCH /map/{id}", [this](const std::string& request) {
         std::istringstream requestStream(request);
@@ -658,7 +666,8 @@ void Server::initializeHandlers() {
         return std::string("Map not found\n");
     });
 
-    registerEndpoint("GET /map/{id}", [this](const std::string& request) {
+    registerEndpoint("GET /map/{id}", [this](const std::string &request)
+                     {
         std::istringstream requestStream(request);
         std::string method, path;
         requestStream >> method >> path;
@@ -671,23 +680,26 @@ void Server::initializeHandlers() {
             if (it != maps.end()) {
                 const Map &m = it->second;
                 std::ostringstream out;
-                out << "{\"id\":\"" << id << "\",\"width\":" << m.getWidth() << ",\"height\":" << m.getHeight() << "}";
+                out << "{\"id\":\"" << id << "\",\"name\":\"" << m.getName() << "\""
+                    << ",\"width\":" << m.getWidth() << ",\"height\":" << m.getHeight() 
+                    << ",\"mapUrl\":\"" << m.getMapUrl() << "\"}";
                 if (logger) logger->log(LogLevel::Info, "Fetched map id=" + id);
                 return out.str();
             }
         }
         if (logger) logger->log(LogLevel::Warn, "Get map not found");
-        return std::string("Map not found\n");
-    });
+        return std::string("Map not found\n"); });
 
-    registerEndpoint("GET /map/", [this](const std::string& request) {
+    registerEndpoint("GET /map/", [this](const std::string &request)
+                     {
         std::ostringstream response;
         response << "[";
         for (const auto& [id, map] : maps) {
             response << "{\"id\":\"" << id << "\""
-                    << ",\"name\":\"Map " << id << "\""
+                    << ",\"name\":\"" << map.getName() << "\""
                     << ",\"width\":" << map.getWidth() 
                     << ",\"height\":" << map.getHeight() 
+                    << ",\"mapUrl\":\"" << map.getMapUrl() << "\""
                     << "},";
         }
         std::string result = response.str();
@@ -696,8 +708,7 @@ void Server::initializeHandlers() {
         }
         result += "]";
 
-        return result;
-    });
+        return result; });
 
     registerEndpoint("DELETE /map/{id}", [this](const std::string& request) {
         std::istringstream requestStream(request);

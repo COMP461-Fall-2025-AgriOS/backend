@@ -2,7 +2,8 @@
 #include <stdexcept>
 #include <sstream>
 
-Map::Map(int width, int height) : width(width), height(height)
+Map::Map(int width, int height, const std::string &name, const std::string &mapUrl)
+    : width(width), height(height), name(name), mapUrl(mapUrl)
 {
     // Validate dimensions
     if (width <= 0 || height <= 0)
@@ -26,6 +27,16 @@ int Map::getWidth() const
 int Map::getHeight() const
 {
     return height;
+}
+
+std::string Map::getName() const
+{
+    return name;
+}
+
+std::string Map::getMapUrl() const
+{
+    return mapUrl;
 }
 
 int Map::getCell(int x, int y) const
