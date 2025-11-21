@@ -17,10 +17,10 @@ public:
     void log(const std::string& msg);
 
     void logPlannerStart(const std::string& robotId, const std::string& robotName, int startX, int startY, int goalX, int goalY, int mapW, int mapH);
-    void logExpandNode(int x, int y, int cost, int parentX, int parentY);
-    void logPushNode(int x, int y, int cost);
-    void logPathReconstructed(const std::vector<std::pair<int,int>>& path);
-    void logMoveExecuted(int x, int y);
+    void logExpandNode(const std::string& robotId, int x, int y, int cost, int parentX, int parentY);
+    void logPushNode(const std::string& robotId, int x, int y, int cost);
+    void logPathReconstructed(const std::string& robotId, const std::vector<std::pair<int,int>>& path);
+    void logMoveExecuted(const std::string& robotId, int x, int y);
 
 private:
     std::string filename_;

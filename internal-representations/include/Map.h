@@ -31,8 +31,6 @@ public:
     
     std::string getName() const;
     std::string getMapUrl() const;
-    std::vector<Robot> getRobots() const;
-    void addRobot(const Robot &robot);
     void removeRobot(const Robot &robot);
 
     // Grid access methods

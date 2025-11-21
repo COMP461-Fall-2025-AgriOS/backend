@@ -45,28 +45,28 @@ void SimulationLogger::log(const std::string& msg)
 void SimulationLogger::logPlannerStart(const std::string& robotId, const std::string& robotName, int startX, int startY, int goalX, int goalY, int mapW, int mapH)
 {
     std::ostringstream ss;
-    ss << "PLANNER_START robotId=\"" << robotId << "\" robotName=\"" << robotName << "\" start=(" << startX << "," << startY << ") goal=(" << goalX << "," << goalY << ") map=(" << mapW << "x" << mapH << ")";
+    ss << "robotId=\"" << robotId << "\" PLANNER_START robotName=\"" << robotName << "\" start=(" << startX << "," << startY << ") goal=(" << goalX << "," << goalY << ") map=(" << mapW << "x" << mapH << ")";
     writeLine(timestamp() + " " + ss.str());
 }
 
-void SimulationLogger::logExpandNode(int x, int y, int cost, int parentX, int parentY)
+void SimulationLogger::logExpandNode(const std::string& robotId, int x, int y, int cost, int parentX, int parentY)
 {
     std::ostringstream ss;
-    ss << "EXPAND x=" << x << " y=" << y << " cost=" << cost << " parent=(" << parentX << "," << parentY << ")";
+    ss << "robotId=\"" << robotId << "\" EXPAND x=" << x << " y=" << y << " cost=" << cost << " parent=(" << parentX << "," << parentY << ")";
     writeLine(timestamp() + " " + ss.str());
 }
 
-void SimulationLogger::logPushNode(int x, int y, int cost)
+void SimulationLogger::logPushNode(const std::string& robotId, int x, int y, int cost)
 {
     std::ostringstream ss;
-    ss << "PUSH x=" << x << " y=" << y << " cost=" << cost;
+    ss << "robotId=\"" << robotId << "\" PUSH x=" << x << " y=" << y << " cost=" << cost;
     writeLine(timestamp() + " " + ss.str());
 }
 
-void SimulationLogger::logPathReconstructed(const std::vector<std::pair<int,int>>& path)
+void SimulationLogger::logPathReconstructed(const std::string& robotId, const std::vector<std::pair<int,int>>& path)
 {
     std::ostringstream ss;
-    ss << "PATH size=" << path.size() << " coords=";
+    ss << "robotId=\"" << robotId << "\" PATH size=" << path.size() << " coords=";
     for (size_t i = 0; i < path.size(); ++i)
     {
         if (i) ss << ";";
@@ -75,9 +75,9 @@ void SimulationLogger::logPathReconstructed(const std::vector<std::pair<int,int>
     writeLine(timestamp() + " " + ss.str());
 }
 
-void SimulationLogger::logMoveExecuted(int x, int y)
+void SimulationLogger::logMoveExecuted(const std::string& robotId, int x, int y)
 {
     std::ostringstream ss;
-    ss << "MOVE_EXECUTED x=" << x << " y=" << y;
+    ss << "robotId=\"" << robotId << "\" MOVE_EXECUTED x=" << x << " y=" << y;
     writeLine(timestamp() + " " + ss.str());
 }

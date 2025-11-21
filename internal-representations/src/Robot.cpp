@@ -9,7 +9,6 @@
 #include <cmath>
 #include <queue>
 #include <limits>
-#include <cstdio>
 
 namespace {
     std::string escapeString(const std::string& input)
@@ -393,12 +392,11 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
 {
     if (target.size() < 2) return;
 
-    // Convert to grid coordinates
+    // Convert to grid
     std::pair<int, int> start = getGridPosition();
     int goalX = static_cast<int>(std::round(target[0]));
     int goalY = static_cast<int>(std::round(target[1]));
 
-    // Bounds and accessibility checks
     if (goalX < 0 || goalX >= map.getWidth() || goalY < 0 || goalY >= map.getHeight()) return;
     if (!map.isAccessible(goalX, goalY)) return;
     if (start.first == goalX && start.second == goalY) return;
@@ -407,16 +405,13 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
     const int height = map.getHeight();
     const int total = width * height;
 
-    // Clear previous simulation log before starting a new one
-    std::remove("simulation.log");
-    
     // Create a simulation logger instance (append to simulation.log)
     SimulationLogger simlog("simulation.log");
     simlog.logPlannerStart(id, name, this->getGridPosition().first, this->getGridPosition().second, goalX, goalY, width, height);
 
     auto indexOf = [width](int x, int y) { return y * width + x; };
 
-    // Dijkstra structures
+    // dijkstra structs
     std::vector<int> dist(total, std::numeric_limits<int>::max());
     std::vector<int> prev(total, -1);
 
@@ -442,7 +437,7 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
         int parentX = -1, parentY = -1;
         int curIdx = indexOf(cur.x, cur.y);
         if (prev[curIdx] != -1) { parentX = prev[curIdx] % width; parentY = prev[curIdx] / width; }
-        simlog.logExpandNode(cur.x, cur.y, cur.cost, parentX, parentY);
+        simlog.logExpandNode(id, cur.x, cur.y, cur.cost, parentX, parentY);
 
         if (cur.x == goalX && cur.y == goalY) break;
 
@@ -463,7 +458,7 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
                 dist[nIdx] = nCost;
                 prev[nIdx] = curIdx;
                 pq.push({nCost, nx, ny});
-                simlog.logPushNode(nx, ny, nCost);
+                simlog.logPushNode(id, nx, ny, nCost);
             }
         }
     }
@@ -481,7 +476,7 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
     }
     std::reverse(path.begin(), path.end());
 
-    simlog.logPathReconstructed(path);
+    simlog.logPathReconstructed(id, path);
 
     // Move along the path
     for (size_t i = 1; i < path.size(); ++i)
@@ -492,6 +487,6 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
             // If a step becomes invalid stop
             break;
         }
-        simlog.logMoveExecuted(step.first, step.second);
+        simlog.logMoveExecuted(id, step.first, step.second);
     }
 }
