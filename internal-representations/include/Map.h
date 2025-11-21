@@ -20,9 +20,12 @@ public:
     // Getter methods
     int getWidth() const;
     int getHeight() const;
-    std::vector<Robot> getRobots() const;
+    const std::vector<Robot>& getRobots() const;
+    std::vector<Robot>& getRobots();
+    Robot* findRobotById(const std::string& robotId);
+    const Robot* findRobotById(const std::string& robotId) const;
     void addRobot(const Robot& robot);
-    void removeRobot(const Robot& robot);
+    void removeRobot(const std::string& robotId);
     
     // Grid access methods
     int getCell(int x, int y) const;

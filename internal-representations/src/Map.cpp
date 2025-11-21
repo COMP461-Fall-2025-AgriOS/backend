@@ -1,6 +1,7 @@
 #include "Map.h"
 #include <stdexcept>
 #include <sstream>
+#include <algorithm>
 
 Map::Map(int width, int height) : width(width), height(height)
 {
@@ -26,6 +27,58 @@ int Map::getWidth() const
 int Map::getHeight() const
 {
     return height;
+}
+
+const std::vector<Robot>& Map::getRobots() const
+{
+    return robots;
+}
+
+std::vector<Robot>& Map::getRobots()
+{
+    return robots;
+}
+
+Robot* Map::findRobotById(const std::string& robotId)
+{
+    for (auto& robot : robots)
+    {
+        if (robot.id == robotId)
+        {
+            return &robot;
+        }
+    }
+    return nullptr;
+}
+
+const Robot* Map::findRobotById(const std::string& robotId) const
+{
+    for (const auto& robot : robots)
+    {
+        if (robot.id == robotId)
+        {
+            return &robot;
+        }
+    }
+    return nullptr;
+}
+
+void Map::addRobot(const Robot& robot)
+{
+    robots.push_back(robot);
+}
+
+void Map::removeRobot(const std::string& robotId)
+{
+    robots.erase(
+        std::remove_if(
+            robots.begin(),
+            robots.end(),
+            [&robotId](const Robot& robot)
+            {
+                return robot.id == robotId;
+            }),
+        robots.end());
 }
 
 int Map::getCell(int x, int y) const
@@ -71,17 +124,6 @@ void Map::initializeEmpty()
     }
 }
 
-void Map::addRobot(const Robot& robot)
-{
-    robots.push_back(robot);
-}
-
-void Map::removeRobot(const Robot& robot)
-{
-    robots.erase(robots.end());
-}
-
-// Serialize to JSON-like format
 std::string Map::serialize() const
 {
     std::ostringstream out;
@@ -109,9 +151,13 @@ std::string Map::serializeRobots() const
 {
     std::ostringstream out;
     out << "[";
-    for (const auto& robot : robots)
+    for (size_t i = 0; i < robots.size(); ++i)
     {
-        out << robot.serialize() << ",";
+        out << robots[i].serialize();
+        if (i + 1 < robots.size())
+        {
+            out << ",";
+        }
     }
     out << "]";
     return out.str();
