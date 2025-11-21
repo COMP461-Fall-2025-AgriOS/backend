@@ -3,7 +3,8 @@
 #include <sstream>
 #include <algorithm>
 
-Map::Map(int width, int height) : width(width), height(height)
+Map::Map(int width, int height, const std::string &name, const std::string &mapUrl)
+    : width(width), height(height), name(name), mapUrl(mapUrl)
 {
     // Validate dimensions
     if (width <= 0 || height <= 0)
@@ -79,6 +80,16 @@ void Map::removeRobot(const std::string& robotId)
                 return robot.id == robotId;
             }),
         robots.end());
+}
+
+std::string Map::getName() const
+{
+    return name;
+}
+
+std::string Map::getMapUrl() const
+{
+    return mapUrl;
 }
 
 int Map::getCell(int x, int y) const

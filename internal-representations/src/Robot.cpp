@@ -9,6 +9,7 @@
 #include <cmath>
 #include <queue>
 #include <limits>
+#include <cstdio>
 
 namespace {
     std::string escapeString(const std::string& input)
@@ -406,6 +407,9 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
     const int height = map.getHeight();
     const int total = width * height;
 
+    // Clear previous simulation log before starting a new one
+    std::remove("simulation.log");
+    
     // Create a simulation logger instance (append to simulation.log)
     SimulationLogger simlog("simulation.log");
     simlog.logPlannerStart(id, name, this->getGridPosition().first, this->getGridPosition().second, goalX, goalY, width, height);
