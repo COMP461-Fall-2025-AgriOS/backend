@@ -513,16 +513,23 @@ std::map<std::string, std::string> TaskManager::hungarianAssignment(
 
 std::map<std::string, std::string> TaskManager::assignAllTasksOptimal()
 {
-    std::map<std::string, std::string> assignments;
+    std::map<std::string, std::string> allAssignments;
     
     if (pendingTasks.empty())
     {
-        return assignments;
+        return allAssignments;
     }
     
-    // Sort tasks by priority (higher priority first)
-    std::vector<Task> sortedTasks = pendingTasks;
-    std::sort(sortedTasks.begin(), sortedTasks.end(),
+    // Get all robots (we'll track their simulated positions after each task)
+    auto& robots = mapRef.getRobots();
+    if (robots.empty())
+    {
+        return allAssignments;
+    }
+
+    // Create a working copy of tasks sorted by priority
+    std::vector<Task> remainingTasks = pendingTasks;
+    std::sort(remainingTasks.begin(), remainingTasks.end(),
         [](const Task& lhs, const Task& rhs)
         {
             if (lhs.priority == rhs.priority)
@@ -531,76 +538,121 @@ std::map<std::string, std::string> TaskManager::assignAllTasksOptimal()
             }
             return lhs.priority > rhs.priority;
         });
-    
-    // Get available robots
-    auto availableRobots = getAvailableRobots();
-    
-    if (availableRobots.empty())
+
+    // Track robot positions as they complete tasks (simulated end positions)
+    std::unordered_map<std::string, std::vector<float>> robotEndPositions;
+    for (auto& robot : robots)
     {
-        return assignments;
+        robotEndPositions[robot.id] = robot.position;
     }
-    
-    // Use Hungarian algorithm with pathfinding cost
-    assignments = hungarianAssignment(
-        sortedTasks,
-        availableRobots,
-        [this](const Robot& robot, const Task& task)
-        {
-            return this->pathfindingCost(robot, task);
-        }
-    );
-    
-    // Apply assignments
-    std::vector<std::string> assignedTaskIds;
-    for (const auto& [taskId, robotId] : assignments)
+
+    // Keep assigning until all tasks are done
+    while (!remainingTasks.empty())
     {
-        // Find the task and update its status
-        auto taskIt = std::find_if(pendingTasks.begin(), pendingTasks.end(),
-            [&taskId](const Task& task)
-            {
-                return task.id == taskId;
-            });
-
-        if (taskIt != pendingTasks.end())
+        // Build list of available robots with their current (simulated) positions
+        std::vector<std::reference_wrapper<Robot>> availableRobots;
+        for (auto& robot : robots)
         {
-            taskIt->status = TaskStatus::Assigned;
-            taskAssignments[taskId] = robotId; // Update assignments map
-            assignedTaskIds.push_back(taskId);
+            availableRobots.push_back(std::ref(robot));
+        }
 
-            // Find the robot and trigger pathfinding
-            Robot* robot = mapRef.findRobotById(robotId);
-            if (robot)
+        if (availableRobots.empty())
+        {
+            break;
+        }
+
+        // For this round, compute costs based on simulated end positions
+        auto roundAssignments = hungarianAssignment(
+            remainingTasks,
+            availableRobots,
+            [this, &robotEndPositions](const Robot& robot, const Task& task)
             {
-                robot->pathfind(mapRef, taskIt->targetPosition, taskIt->moduleIds);
+                // Use the simulated end position for cost calculation
+                auto it = robotEndPositions.find(robot.id);
+                if (it != robotEndPositions.end())
+                {
+                    GridPoint robotPos = toGridPoint(it->second);
+                    GridPoint taskPos = toGridPoint(task.targetPosition);
+                    int distance = computePathDistance(robotPos, taskPos);
+                    float priorityPenalty = -task.priority * 10.0f;
+                    return static_cast<float>(distance) + priorityPenalty;
+                }
+                return this->pathfindingCost(robot, task);
+            }
+        );
+
+        if (roundAssignments.empty())
+        {
+            break; // No more assignments possible
+        }
+
+        // Apply this round's assignments
+        std::vector<std::string> assignedTaskIds;
+        for (const auto& [taskId, robotId] : roundAssignments)
+        {
+            auto taskIt = std::find_if(remainingTasks.begin(), remainingTasks.end(),
+                [&taskId](const Task& task)
+                {
+                    return task.id == taskId;
+                });
+
+            if (taskIt != remainingTasks.end())
+            {
+                // Update robot's simulated end position to this task's target
+                robotEndPositions[robotId] = taskIt->targetPosition;
+
+                // Find the robot and trigger pathfinding from its current position
+                Robot* robot = mapRef.findRobotById(robotId);
+                if (robot)
+                {
+                    robot->pathfind(mapRef, taskIt->targetPosition, taskIt->moduleIds);
+                    // Update robot's actual position to the task target (for next pathfind)
+                    robot->setPosition(taskIt->targetPosition);
+                }
+
+                taskIt->status = TaskStatus::Assigned;
+                taskAssignments[taskId] = robotId;
+                allAssignments[taskId] = robotId;
+                assignedTaskIds.push_back(taskId);
             }
         }
+
+        // Remove assigned tasks from remaining list
+        remainingTasks.erase(
+            std::remove_if(remainingTasks.begin(), remainingTasks.end(),
+                [&assignedTaskIds](const Task& task)
+                {
+                    return std::find(assignedTaskIds.begin(), assignedTaskIds.end(), task.id) != assignedTaskIds.end();
+                }),
+            remainingTasks.end()
+        );
     }
 
-    // Remove assigned tasks from pending list
-    pendingTasks.erase(
-        std::remove_if(pendingTasks.begin(), pendingTasks.end(),
-            [&assignedTaskIds](const Task& task)
-            {
-                return std::find(assignedTaskIds.begin(), assignedTaskIds.end(), task.id) != assignedTaskIds.end();
-            }),
-        pendingTasks.end()
-    );
+    // Clear pending tasks (all have been assigned)
+    pendingTasks.clear();
 
-    return assignments;
+    return allAssignments;
 }
 
 std::map<std::string, std::string> TaskManager::assignAllTasksBalanced()
 {
-    std::map<std::string, std::string> assignments;
+    std::map<std::string, std::string> allAssignments;
     
     if (pendingTasks.empty())
     {
-        return assignments;
+        return allAssignments;
     }
     
-    // Sort tasks by priority
-    std::vector<Task> sortedTasks = pendingTasks;
-    std::sort(sortedTasks.begin(), sortedTasks.end(),
+    // Get all robots
+    auto& robots = mapRef.getRobots();
+    if (robots.empty())
+    {
+        return allAssignments;
+    }
+
+    // Create a working copy of tasks sorted by priority
+    std::vector<Task> remainingTasks = pendingTasks;
+    std::sort(remainingTasks.begin(), remainingTasks.end(),
         [](const Task& lhs, const Task& rhs)
         {
             if (lhs.priority == rhs.priority)
@@ -609,60 +661,98 @@ std::map<std::string, std::string> TaskManager::assignAllTasksBalanced()
             }
             return lhs.priority > rhs.priority;
         });
-    
-    // Get available robots
-    auto availableRobots = getAvailableRobots();
-    
-    if (availableRobots.empty())
+
+    // Track robot positions as they complete tasks
+    std::unordered_map<std::string, std::vector<float>> robotEndPositions;
+    for (auto& robot : robots)
     {
-        return assignments;
+        robotEndPositions[robot.id] = robot.position;
     }
-    
-    // Use Hungarian algorithm with makespan cost
-    assignments = hungarianAssignment(
-        sortedTasks,
-        availableRobots,
-        [this](const Robot& robot, const Task& task)
-        {
-            return this->makespanCost(robot, task);
-        }
-    );
-    
-    // Apply assignments
-    std::vector<std::string> assignedTaskIds;
-    for (const auto& [taskId, robotId] : assignments)
+
+    // Keep assigning until all tasks are done
+    while (!remainingTasks.empty())
     {
-        auto taskIt = std::find_if(pendingTasks.begin(), pendingTasks.end(),
-            [&taskId](const Task& task)
-            {
-                return task.id == taskId;
-            });
-
-        if (taskIt != pendingTasks.end())
+        std::vector<std::reference_wrapper<Robot>> availableRobots;
+        for (auto& robot : robots)
         {
-            taskIt->status = TaskStatus::Assigned;
-            taskAssignments[taskId] = robotId; // Update assignments map
-            assignedTaskIds.push_back(taskId);
+            availableRobots.push_back(std::ref(robot));
+        }
 
-            Robot* robot = mapRef.findRobotById(robotId);
-            if (robot)
+        if (availableRobots.empty())
+        {
+            break;
+        }
+
+        // Compute costs based on simulated end positions with makespan consideration
+        auto roundAssignments = hungarianAssignment(
+            remainingTasks,
+            availableRobots,
+            [this, &robotEndPositions](const Robot& robot, const Task& task)
             {
-                robot->pathfind(mapRef, taskIt->targetPosition, taskIt->moduleIds);
+                auto it = robotEndPositions.find(robot.id);
+                if (it != robotEndPositions.end())
+                {
+                    GridPoint robotPos = toGridPoint(it->second);
+                    GridPoint taskPos = toGridPoint(task.targetPosition);
+                    int distance = computePathDistance(robotPos, taskPos);
+                    float timeCost = distance > 0 && robot.speed > 0.0f
+                        ? static_cast<float>(distance) / robot.speed
+                        : static_cast<float>(distance);
+                    float priorityPenalty = -task.priority * 10.0f;
+                    return timeCost + priorityPenalty;
+                }
+                return this->makespanCost(robot, task);
+            }
+        );
+
+        if (roundAssignments.empty())
+        {
+            break;
+        }
+
+        // Apply this round's assignments
+        std::vector<std::string> assignedTaskIds;
+        for (const auto& [taskId, robotId] : roundAssignments)
+        {
+            auto taskIt = std::find_if(remainingTasks.begin(), remainingTasks.end(),
+                [&taskId](const Task& task)
+                {
+                    return task.id == taskId;
+                });
+
+            if (taskIt != remainingTasks.end())
+            {
+                robotEndPositions[robotId] = taskIt->targetPosition;
+
+                Robot* robot = mapRef.findRobotById(robotId);
+                if (robot)
+                {
+                    robot->pathfind(mapRef, taskIt->targetPosition, taskIt->moduleIds);
+                    robot->setPosition(taskIt->targetPosition);
+                }
+
+                taskIt->status = TaskStatus::Assigned;
+                taskAssignments[taskId] = robotId;
+                allAssignments[taskId] = robotId;
+                assignedTaskIds.push_back(taskId);
             }
         }
+
+        // Remove assigned tasks from remaining list
+        remainingTasks.erase(
+            std::remove_if(remainingTasks.begin(), remainingTasks.end(),
+                [&assignedTaskIds](const Task& task)
+                {
+                    return std::find(assignedTaskIds.begin(), assignedTaskIds.end(), task.id) != assignedTaskIds.end();
+                }),
+            remainingTasks.end()
+        );
     }
 
-    // Remove assigned tasks from pending list
-    pendingTasks.erase(
-        std::remove_if(pendingTasks.begin(), pendingTasks.end(),
-            [&assignedTaskIds](const Task& task)
-            {
-                return std::find(assignedTaskIds.begin(), assignedTaskIds.end(), task.id) != assignedTaskIds.end();
-            }),
-        pendingTasks.end()
-    );
+    // Clear pending tasks
+    pendingTasks.clear();
 
-    return assignments;
+    return allAssignments;
 }
 
 
