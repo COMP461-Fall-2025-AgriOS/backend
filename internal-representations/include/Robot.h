@@ -20,11 +20,15 @@ struct Robot
     float speed; // movement speed per step
     float maxDistance; // maximum distance the robot can travel
 
+    // Task execution
+    std::vector<std::string> currentTaskModules; // Modules to invoke when reaching destination
+
     // Movement methods
     std::vector<float> getPos() const;
     void setPosition(float x, float y);
     void setPosition(const std::vector<float>& newPos);
 	void pathfind(const Map& map, const std::vector<float>& target);
+    void pathfind(const Map& map, const std::vector<float>& target, const std::vector<std::string>& taskModules);
     
     // Movement validation and execution
     bool canMoveTo(float x, float y, const Map& map) const;
