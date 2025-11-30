@@ -1,6 +1,7 @@
 #include "Robot.h"
 #include "Map.h"
 #include "SimulationLogger.h"
+#include "ModuleManager.h"
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
@@ -260,25 +261,17 @@ bool Robot::canMoveTo(float x, float y, const Map& map) const
     {
         return false;
     }
-    
+
     // Check if the position is accessible
     if (!map.isAccessible(static_cast<int>(x), static_cast<int>(y)))
     {
         return false;
     }
-    
-    // Check distance constraint if maxDistance is set
-    if (maxDistance > 0)
-    {
-        float currentX = position[0];
-        float currentY = position[1];
-        float distance = std::sqrt((x - currentX) * (x - currentX) + (y - currentY) * (y - currentY));
-        if (distance > maxDistance)
-        {
-            return false;
-        }
-    }
-    
+
+    // NOTE: Removed maxDistance constraint for pathfinding
+    // Pathfinding computes valid paths, so distance checks are not needed during execution
+    // The maxDistance field can be used for other purposes if needed
+
     return true;
 }
 
@@ -397,9 +390,21 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
     int goalX = static_cast<int>(std::round(target[0]));
     int goalY = static_cast<int>(std::round(target[1]));
 
-    if (goalX < 0 || goalX >= map.getWidth() || goalY < 0 || goalY >= map.getHeight()) return;
-    if (!map.isAccessible(goalX, goalY)) return;
-    if (start.first == goalX && start.second == goalY) return;
+    if (goalX < 0 || goalX >= map.getWidth() || goalY < 0 || goalY >= map.getHeight()) {
+        SimulationLogger simlog("simulation.log");
+        simlog.log("WARNING: Pathfind failed - Target out of bounds for robot " + id);
+        return;
+    }
+    if (!map.isAccessible(goalX, goalY)) {
+        SimulationLogger simlog("simulation.log");
+        simlog.log("WARNING: Pathfind failed - Target is an obstacle for robot " + id);
+        return;
+    }
+    if (start.first == goalX && start.second == goalY) {
+        SimulationLogger simlog("simulation.log");
+        simlog.log("INFO: Robot " + id + " already at target");
+        return;
+    }
 
     const int width = map.getWidth();
     const int height = map.getHeight();
@@ -437,7 +442,7 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
         int parentX = -1, parentY = -1;
         int curIdx = indexOf(cur.x, cur.y);
         if (prev[curIdx] != -1) { parentX = prev[curIdx] % width; parentY = prev[curIdx] / width; }
-        simlog.logExpandNode(id, cur.x, cur.y, cur.cost, parentX, parentY);
+        // simlog.logExpandNode(id, cur.x, cur.y, cur.cost, parentX, parentY);
 
         if (cur.x == goalX && cur.y == goalY) break;
 
@@ -458,7 +463,7 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
                 dist[nIdx] = nCost;
                 prev[nIdx] = curIdx;
                 pq.push({nCost, nx, ny});
-                simlog.logPushNode(id, nx, ny, nCost);
+                // simlog.logPushNode(id, nx, ny, nCost);
             }
         }
     }
@@ -485,8 +490,51 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
         if (!moveToGrid(step.first, step.second, map))
         {
             // If a step becomes invalid stop
+            simlog.log("ERROR: Robot " + id + " failed to move to (" + std::to_string(step.first) + "," + std::to_string(step.second) + ") at step " + std::to_string(i) + "/" + std::to_string(path.size()));
             break;
         }
-        simlog.logMoveExecuted(id, step.first, step.second);
+
+        // Log every 10th move to reduce log verbosity
+        if (i % 10 == 0 || i == path.size() - 1) {
+            simlog.logMoveExecuted(id, step.first, step.second);
+        }
+    }
+}
+
+// Pathfind with task module invocation
+void Robot::pathfind(const Map& map, const std::vector<float>& target, const std::vector<std::string>& taskModules)
+{
+    // Store task modules
+    currentTaskModules = taskModules;
+
+    // Execute normal pathfinding
+    pathfind(map, target);
+
+    // After reaching destination, invoke all task modules
+    if (!currentTaskModules.empty()) {
+        // Build context JSON for the plugin
+        std::ostringstream context;
+        context << "{";
+        context << "\"robotId\":\"" << id << "\",";
+        context << "\"robotName\":\"" << name << "\",";
+        context << "\"robotType\":\"" << type << "\",";
+        context << "\"position\":[" << position[0] << "," << position[1] << "],";
+        context << "\"mapId\":\"" << mapId << "\"";
+        context << "}";
+
+        std::string contextStr = context.str();
+
+        // Invoke each module
+        for (const auto& moduleId : currentTaskModules) {
+            bool success = ModuleManager::instance().invoke(moduleId, contextStr);
+            if (!success) {
+                // Log warning if module invocation failed
+                SimulationLogger logger("simulation.log");
+                logger.log("WARNING: Failed to invoke module " + moduleId + " for robot " + id);
+            }
+        }
+
+        // Clear task modules after invocation
+        currentTaskModules.clear();
     }
 }

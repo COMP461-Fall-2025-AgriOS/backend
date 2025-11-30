@@ -21,6 +21,7 @@ struct Task
     std::vector<float> targetPosition; // Expected to contain at least x and y
     TaskStatus status = TaskStatus::Pending;
     int priority = 0;
+    std::vector<std::string> moduleIds; // Plugins/modules to invoke when task completes (at this location)
 };
 
 #endif

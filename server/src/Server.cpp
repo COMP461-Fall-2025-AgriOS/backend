@@ -1,6 +1,7 @@
 #include "Server.h"
 #include "Robot.h"
 #include "Map.h"
+#include "TaskManager.h"
 #include "Logger.h"
 #include "Module.h"
 #include <iostream>
@@ -12,6 +13,7 @@
 #include <string>
 #include <stdexcept>
 #include <cstring>
+#include <cstdio>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -79,7 +81,8 @@ Server::~Server() {
 }
 
 std::unordered_map<std::string, Robot> robots;
-std::unordered_map<std::string, Map> maps;
+std::unordered_map<std::string, std::unique_ptr<Map>> maps;
+std::unordered_map<std::string, std::unique_ptr<TaskManager>> taskManagers; // mapId -> TaskManager
 std::unordered_map<std::string, Module> modules;
 
 // Helper function to extract body from HTTP request
@@ -391,6 +394,14 @@ void Server::initializeHandlers() {
         }
         robots[newRobot.id] = newRobot;
 
+        // Add robot to map if mapId is present
+        if (!newRobot.mapId.empty()) {
+            auto mIt = maps.find(newRobot.mapId);
+            if (mIt != maps.end()) {
+                mIt->second->addRobot(newRobot);
+            }
+        }
+
         if (logger) logger->log(LogLevel::Info, std::string("Created robot id=") + newRobot.id);
         return std::string("Robot created successfully\n");
     });
@@ -401,6 +412,13 @@ void Server::initializeHandlers() {
         std::vector<Robot> newRobots = Robot::deserializeList(body);
         for (const auto& robot : newRobots) {
             robots[robot.id] = robot;
+            // Add robot to map if mapId is present
+            if (!robot.mapId.empty()) {
+                auto mIt = maps.find(robot.mapId);
+                if (mIt != maps.end()) {
+                    mIt->second->addRobot(robot);
+                }
+            }
         }
 
         if (logger) logger->log(LogLevel::Info, "Created " + std::to_string(newRobots.size()) + " robots");
@@ -430,6 +448,18 @@ void Server::initializeHandlers() {
                     float x = std::stof(posMatch[1]);
                     float y = std::stof(posMatch[2]);
                     existingRobot.setPosition(x, y);
+                    
+                    // Update robot in map
+                    if (!existingRobot.mapId.empty()) {
+                        auto mIt = maps.find(existingRobot.mapId);
+                        if (mIt != maps.end()) {
+                            Robot* mapRobot = mIt->second->findRobotById(id);
+                            if (mapRobot) {
+                                mapRobot->setPosition(x, y);
+                            }
+                        }
+                    }
+
                     if (logger) logger->log(LogLevel::Info, "Updated robot position id=" + id + " to (" + std::to_string(x) + "," + std::to_string(y) + ")");
                 }
                 
@@ -487,7 +517,17 @@ void Server::initializeHandlers() {
         std::smatch match;
         if (std::regex_search(path, match, idRegex)) {
             std::string id = match[1];
-            if (robots.erase(id)) {
+            auto it = robots.find(id);
+            if (it != robots.end()) {
+                // Remove from map first
+                if (!it->second.mapId.empty()) {
+                    auto mIt = maps.find(it->second.mapId);
+                    if (mIt != maps.end()) {
+                        mIt->second->removeRobot(id);
+                    }
+                }
+                
+                robots.erase(it);
                 if (logger) logger->log(LogLevel::Info, "Deleted robot id=" + id);
                 return std::string("Robot deleted successfully\n");
             }
@@ -631,8 +671,11 @@ void Server::initializeHandlers() {
                 std::string name = nameMatch[1];
                 std::string mapUrl = mapUrlMatch[1];
                 
-                maps.emplace(id, Map(width, height, name, mapUrl));
-                
+                auto mapResult = maps.emplace(id, std::make_unique<Map>(width, height, name, mapUrl));
+
+                // Create a TaskManager for this map
+                taskManagers[id] = std::make_unique<TaskManager>(*(mapResult.first->second));
+
                 if (logger) logger->log(LogLevel::Info, "Created map with id=" + id + ", name=" + name + ", width=" + std::to_string(width) + ", height=" + std::to_string(height) + ", mapUrl=" + mapUrl);
 
                 // If the mapUrl appears to be a local image file, attempt to run
@@ -786,7 +829,7 @@ void Server::initializeHandlers() {
             std::string id = match[1];
             auto it = maps.find(id);
             if (it != maps.end()) {
-                const Map &m = it->second;
+                const Map &m = *(it->second);
                 std::ostringstream out;
                 out << "{\"id\":\"" << id << "\",\"name\":\"" << m.getName() << "\""
                     << ",\"width\":" << m.getWidth() << ",\"height\":" << m.getHeight() 
@@ -804,10 +847,10 @@ void Server::initializeHandlers() {
         response << "[";
         for (const auto& [id, map] : maps) {
             response << "{\"id\":\"" << id << "\""
-                    << ",\"name\":\"" << map.getName() << "\""
-                    << ",\"width\":" << map.getWidth() 
-                    << ",\"height\":" << map.getHeight() 
-                    << ",\"mapUrl\":\"" << map.getMapUrl() << "\""
+                    << ",\"name\":\"" << map->getName() << "\""
+                    << ",\"width\":" << map->getWidth() 
+                    << ",\"height\":" << map->getHeight() 
+                    << ",\"mapUrl\":\"" << map->getMapUrl() << "\""
                     << "},";
         }
         std::string result = response.str();
@@ -828,6 +871,9 @@ void Server::initializeHandlers() {
         if (std::regex_search(path, match, idRegex)) {
             std::string id = match[1];
             if (maps.erase(id)) {
+                // Delete TaskManager for this map
+                taskManagers.erase(id);
+
                 // Delete all robots that belong to this map
                 int deletedRobots = 0;
                 for (auto it = robots.begin(); it != robots.end();) {
@@ -991,9 +1037,12 @@ void Server::initializeHandlers() {
                 return std::string("bad target values\n");
             }
 
+            // Clear simulation log before starting new pathfinding
+            std::remove("simulation.log");
+
             // Execute pathfinding (this will append to simulation.log)
             try {
-                rIt->second.pathfind(mIt->second, std::vector<float>{tx, ty});
+                rIt->second.pathfind(*(mIt->second), std::vector<float>{tx, ty});
             } catch (const std::exception& ex) {
                 if (logger) logger->log(LogLevel::Error, std::string("Pathfind exception: ") + ex.what());
                 return std::string("Pathfind failed\n");
@@ -1064,6 +1113,216 @@ void Server::initializeHandlers() {
         if (logger) logger->log(LogLevel::Info, "Served simulation events");
         return out.str();
     });
+
+    // POST /simulation/clear - Clear simulation.log
+    registerEndpoint("POST /simulation/clear", [this](const std::string& request) {
+        std::ofstream logFile("simulation.log", std::ofstream::out | std::ofstream::trunc);
+        if (!logFile.is_open()) {
+             if (logger) logger->log(LogLevel::Warn, "Failed to clear simulation.log");
+             return std::string("{\"error\":\"Failed to clear log\"}\n");
+        }
+        logFile.close();
+        if (logger) logger->log(LogLevel::Info, "Cleared simulation events");
+        return std::string("{\"success\":true}\n");
+    });
+
+    // ===== TASK MANAGEMENT ENDPOINTS =====
+
+    // POST /tasks - Create a new task
+    registerEndpoint("POST /tasks", [this](const std::string& request) {
+        std::string body = extractBody(request);
+
+        // Parse JSON: {mapId, targetPosition:[x,y], priority, description, moduleIds:["id1","id2"]}
+        std::regex mapIdRe("\"mapId\"\\s*:\\s*\"([^\"]+)\"");
+        std::regex targetRe("\"targetPosition\"\\s*:\\s*\\[\\s*([0-9.+\\-eE]+)\\s*,\\s*([0-9.+\\-eE]+)\\s*\\]");
+        std::regex priorityRe("\"priority\"\\s*:\\s*([0-9]+)");
+        std::regex descRe("\"description\"\\s*:\\s*\"([^\"]+)\"");
+
+        std::smatch m1, m2, m3, m4;
+        if (!std::regex_search(body, m1, mapIdRe) || !std::regex_search(body, m2, targetRe)) {
+            return std::string("{\"error\":\"Missing mapId or targetPosition\"}\n");
+        }
+
+        std::string mapId = m1[1];
+        float x = std::stof(m2[1]);
+        float y = std::stof(m2[2]);
+        int priority = std::regex_search(body, m3, priorityRe) ? std::stoi(m3[1]) : 0;
+        std::string description = std::regex_search(body, m4, descRe) ? m4[1].str() : "";
+
+        // Parse moduleIds array: ["id1","id2",...]
+        std::vector<std::string> moduleIds;
+        std::regex moduleIdsRe("\"moduleIds\"\\s*:\\s*\\[([^\\]]+)\\]");
+        std::smatch m5;
+        if (std::regex_search(body, m5, moduleIdsRe)) {
+            std::string moduleIdsStr = m5[1];
+            std::regex moduleRe("\"([^\"]+)\"");
+            std::sregex_iterator iter(moduleIdsStr.begin(), moduleIdsStr.end(), moduleRe);
+            std::sregex_iterator end;
+            while (iter != end) {
+                moduleIds.push_back((*iter)[1].str());
+                ++iter;
+            }
+        }
+
+        auto tmIt = taskManagers.find(mapId);
+        if (tmIt == taskManagers.end()) {
+            return std::string("{\"error\":\"Map not found\"}\n");
+        }
+
+        // Create task using TaskManager's auto-ID generation
+        // Don't use addTask(Task&) - it expects task.id to be set
+        // Instead, manually create and add with proper ID generation
+        Task task;
+        task.id = tmIt->second->generateTaskId();  // Generate unique ID
+        task.targetPosition = {x, y};
+        task.priority = priority;
+        task.description = description;
+        task.moduleIds = moduleIds;
+        tmIt->second->addTask(task);
+
+        if (logger) logger->log(LogLevel::Info, "Created task for map=" + mapId + " with " + std::to_string(moduleIds.size()) + " modules");
+        return std::string("{\"success\":true}\n");
+    });
+
+    // GET /tasks?mapId={id} - List all tasks for a map
+    registerEndpoint("GET /tasks", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+
+        std::regex mapIdRe("mapId=([^&\\s]+)");
+        std::smatch match;
+        if (!std::regex_search(path, match, mapIdRe)) {
+            return std::string("{\"error\":\"Missing mapId parameter\"}\n");
+        }
+
+        std::string mapId = match[1];
+        auto tmIt = taskManagers.find(mapId);
+        if (tmIt == taskManagers.end()) {
+            return std::string("{\"error\":\"Map not found\"}\n");
+        }
+
+        auto tasks = tmIt->second->getPendingTasks();
+        std::ostringstream out;
+        out << "{\"tasks\":[";
+        for (size_t i = 0; i < tasks.size(); ++i) {
+            if (i > 0) out << ",";
+            out << "{";
+            out << "\"id\":\"" << tasks[i].id << "\",";
+            out << "\"description\":\"" << tasks[i].description << "\",";
+            out << "\"targetPosition\":[" << tasks[i].targetPosition[0] << "," << tasks[i].targetPosition[1] << "],";
+            out << "\"priority\":" << tasks[i].priority << ",";
+            out << "\"moduleIds\":[";
+            for (size_t j = 0; j < tasks[i].moduleIds.size(); ++j) {
+                if (j > 0) out << ",";
+                out << "\"" << tasks[i].moduleIds[j] << "\"";
+            }
+            out << "]";
+            out << "}";
+        }
+        out << "]}";
+        return out.str();
+    });
+
+    // POST /tasks/assign?mapId={id}&algorithm={greedy|optimal|balanced} - Assign tasks to robots
+    registerEndpoint("POST /tasks/assign", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+
+        std::regex mapIdRe("mapId=([^&\\s]+)");
+        std::regex algoRe("algorithm=([^&\\s]+)");
+        std::smatch m1, m2;
+
+        if (!std::regex_search(path, m1, mapIdRe)) {
+            return std::string("{\"error\":\"Missing mapId parameter\"}\n");
+        }
+
+        std::string mapId = m1[1];
+        std::string algorithm = std::regex_search(path, m2, algoRe) ? m2[1].str() : "greedy";
+
+        auto tmIt = taskManagers.find(mapId);
+        if (tmIt == taskManagers.end()) {
+            return std::string("{\"error\":\"Map not found\"}\n");
+        }
+
+        // Clear simulation log before starting new multi-robot simulation
+        std::remove("simulation.log");
+
+        // Clear previous task assignments to make all robots available
+        tmIt->second->clearAllAssignments();
+
+        // Log task and robot counts
+        auto pendingTasks = tmIt->second->getPendingTasks();
+        auto& robots = maps[mapId]->getRobots();
+        if (logger) {
+            logger->log(LogLevel::Info, "Starting task assignment: " + std::to_string(pendingTasks.size()) + " tasks, " + std::to_string(robots.size()) + " robots on map");
+        }
+
+        std::ostringstream out;
+        out << "{\"assignments\":[";
+
+        if (algorithm == "optimal") {
+            auto assignments = tmIt->second->assignAllTasksOptimal();
+            if (logger) logger->log(LogLevel::Info, "Optimal algorithm assigned " + std::to_string(assignments.size()) + " robots to tasks");
+            int idx = 0;
+            for (const auto& [taskId, robotId] : assignments) {
+                if (idx++ > 0) out << ",";
+                out << "{\"taskId\":\"" << taskId << "\",\"robotId\":\"" << robotId << "\"}";
+            }
+            out << "]}";
+        } else if (algorithm == "balanced") {
+            auto assignments = tmIt->second->assignAllTasksBalanced();
+            if (logger) logger->log(LogLevel::Info, "Balanced algorithm assigned " + std::to_string(assignments.size()) + " robots to tasks");
+            int idx = 0;
+            for (const auto& [taskId, robotId] : assignments) {
+                if (idx++ > 0) out << ",";
+                out << "{\"taskId\":\"" << taskId << "\",\"robotId\":\"" << robotId << "\"}";
+            }
+            out << "]}";
+        } else { // greedy (default)
+            int assignmentCount = 0;
+            while (true) {
+                auto robotId = tmIt->second->assignNextTaskNearestRobot();
+                if (!robotId.has_value()) break;
+                assignmentCount++;
+            }
+            if (logger) logger->log(LogLevel::Info, "Greedy algorithm assigned " + std::to_string(assignmentCount) + " robots to tasks");
+            out << "]}";
+        }
+
+        return out.str();
+    });
+
+    // GET /tasks/assignments?mapId={id} - Get current task assignments
+    registerEndpoint("GET /tasks/assignments", [this](const std::string& request) {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+
+        std::regex mapIdRe("mapId=([^&\\s]+)");
+        std::smatch match;
+        if (!std::regex_search(path, match, mapIdRe)) {
+            return std::string("{\"error\":\"Missing mapId parameter\"}\n");
+        }
+
+        std::string mapId = match[1];
+        auto tmIt = taskManagers.find(mapId);
+        if (tmIt == taskManagers.end()) {
+            return std::string("{\"error\":\"Map not found\"}\n");
+        }
+
+        const auto& assignments = tmIt->second->getAssignments();
+        std::ostringstream out;
+        out << "{\"assignments\":[";
+        int idx = 0;
+        for (const auto& [taskId, robotId] : assignments) {
+            if (idx++ > 0) out << ",";
+            out << "{\"taskId\":\"" << taskId << "\",\"robotId\":\"" << robotId << "\"}";
+        }
+        out << "]}";
+        return out.str();
+    });
 }
 
 void Server::start() {
@@ -1088,62 +1347,94 @@ void Server::stop() {
 int Server::loadPluginsFromDirectory(const std::string& dirPath) {
     // remember directory for listing
     pluginsDirectory = dirPath;
-    DIR* dir = opendir(dirPath.c_str());
-    if (!dir) {
-        if (logger) logger->log(LogLevel::Warn, std::string("Failed to open plugins directory: ") + dirPath);
-        return 0;
-    }
 
     int loaded = 0;
-    struct dirent* ent;
-    while ((ent = readdir(dir)) != nullptr) {
-        std::string name = ent->d_name;
-        if (name.size() > 3 && name.substr(name.size()-3) == ".so") {
-            std::string fullpath = dirPath + "/" + name;
-            void* handle = dlopen(fullpath.c_str(), RTLD_NOW | RTLD_LOCAL);
-            if (!handle) {
-                if (logger) logger->log(LogLevel::Error, std::string("dlopen failed for ") + fullpath + ": " + dlerror());
-                continue;
-            }
 
-            using start_fn_t = int(*)(const HostAPI*, const char*);
-            using stop_fn_t = void(*)();
-
-            dlerror(); // clear
-            start_fn_t start = reinterpret_cast<start_fn_t>(dlsym(handle, "plugin_start"));
-            const char* dlsym_err = dlerror();
-            if (dlsym_err || !start) {
-                if (logger) logger->log(LogLevel::Warn, std::string("plugin_start not found in ") + fullpath);
-                dlclose(handle);
-                continue;
-            }
-
-            stop_fn_t stop = reinterpret_cast<stop_fn_t>(dlsym(handle, "plugin_stop"));
-            // stop may be optional; still allow plugin to load
-
-            // Use file base name (without .so) as moduleId
-            std::string moduleId = name.substr(0, name.size()-3);
-
-            int rc = start(&hostApi, moduleId.c_str());
-            if (rc != 0) {
-                if (logger) logger->log(LogLevel::Warn, std::string("plugin_start failed for ") + fullpath);
-                if (stop) stop();
-                dlclose(handle);
-                continue;
-            }
-
-            PluginEntry entry;
-            entry.handle = handle;
-            entry.stopFn = stop;
-            entry.path = fullpath;
-            entry.moduleId = moduleId;
-            loadedPlugins.push_back(entry);
-            ++loaded;
-            if (logger) logger->log(LogLevel::Info, std::string("Loaded plugin: ") + fullpath + " as moduleId=" + moduleId);
+    // Helper function to load plugins from a directory (non-recursive in this call)
+    auto loadFromDir = [&](const std::string& path) -> int {
+        DIR* dir = opendir(path.c_str());
+        if (!dir) {
+            if (logger) logger->log(LogLevel::Warn, std::string("Failed to open plugins directory: ") + path);
+            return 0;
         }
+
+        int count = 0;
+        struct dirent* ent;
+        while ((ent = readdir(dir)) != nullptr) {
+            std::string name = ent->d_name;
+            if (name.size() > 3 && name.substr(name.size()-3) == ".so") {
+                std::string fullpath = path + "/" + name;
+                void* handle = dlopen(fullpath.c_str(), RTLD_NOW | RTLD_LOCAL);
+                if (!handle) {
+                    if (logger) logger->log(LogLevel::Error, std::string("dlopen failed for ") + fullpath + ": " + dlerror());
+                    continue;
+                }
+
+                using start_fn_t = int(*)(const HostAPI*, const char*);
+                using stop_fn_t = void(*)();
+
+                dlerror(); // clear
+                start_fn_t start = reinterpret_cast<start_fn_t>(dlsym(handle, "plugin_start"));
+                const char* dlsym_err = dlerror();
+                if (dlsym_err || !start) {
+                    if (logger) logger->log(LogLevel::Warn, std::string("plugin_start not found in ") + fullpath);
+                    dlclose(handle);
+                    continue;
+                }
+
+                stop_fn_t stop = reinterpret_cast<stop_fn_t>(dlsym(handle, "plugin_stop"));
+                // stop may be optional; still allow plugin to load
+
+                // Use file base name (without .so) as moduleId
+                std::string moduleId = name.substr(0, name.size()-3);
+
+                int rc = start(&hostApi, moduleId.c_str());
+                if (rc != 0) {
+                    if (logger) logger->log(LogLevel::Warn, std::string("plugin_start failed for ") + fullpath);
+                    if (stop) stop();
+                    dlclose(handle);
+                    continue;
+                }
+
+                PluginEntry entry;
+                entry.handle = handle;
+                entry.stopFn = stop;
+                entry.path = fullpath;
+                entry.moduleId = moduleId;
+                loadedPlugins.push_back(entry);
+                ++count;
+                if (logger) logger->log(LogLevel::Info, std::string("Loaded plugin: ") + fullpath + " as moduleId=" + moduleId);
+            }
+        }
+
+        closedir(dir);
+        return count;
+    };
+
+    // Load from the specified directory
+    loaded += loadFromDir(dirPath);
+
+    // Also scan subdirectories recursively (one level deep for now)
+    DIR* dir = opendir(dirPath.c_str());
+    if (dir) {
+        struct dirent* ent;
+        while ((ent = readdir(dir)) != nullptr) {
+            std::string name = ent->d_name;
+            if (name == "." || name == "..") continue;
+
+            std::string subpath = dirPath + "/" + name;
+            DIR* subdir = opendir(subpath.c_str());
+            if (subdir) {
+                closedir(subdir);
+                // It's a directory, try loading plugins from it
+                if (logger) logger->log(LogLevel::Info, std::string("Scanning subdirectory: ") + subpath);
+                loaded += loadFromDir(subpath);
+            }
+        }
+        closedir(dir);
     }
 
-    closedir(dir);
+    if (logger) logger->log(LogLevel::Info, std::string("Total plugins loaded: ") + std::to_string(loaded));
     return loaded;
 }
 
@@ -1586,6 +1877,13 @@ std::string Server::handleRequest(const std::string& request) {
     std::string method, path;
     requestStream >> method >> path;
 
+    // Strip query parameters from path for matching
+    std::string pathWithoutQuery = path;
+    size_t queryPos = pathWithoutQuery.find('?');
+    if (queryPos != std::string::npos) {
+        pathWithoutQuery = pathWithoutQuery.substr(0, queryPos);
+    }
+
     for (const auto& [endpoint, handler] : endpointHandlers) {
         auto spacePos = endpoint.find(' ');
         if (spacePos == std::string::npos) continue;
@@ -1603,9 +1901,9 @@ std::string Server::handleRequest(const std::string& request) {
             }
         }
 
-        // Use regex to match the path only (not the method)
+        // Use regex to match the path only (not the method, and without query params)
         std::regex pattern(endpointPattern);
-        if (std::regex_match(path, pattern)) {
+        if (std::regex_match(pathWithoutQuery, pattern)) {
             std::string body = handler(request);
             std::ostringstream response;
             response << "HTTP/1.1 200 OK\r\n";

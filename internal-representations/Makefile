@@ -1,5 +1,5 @@
 CC = g++
-CFLAGS = -Iinclude -I.. -I../.. -fPIC -Wall -O2 -std=c++17
+CFLAGS = -Iinclude -I../modules/include -I.. -I../.. -fPIC -Wall -O2 -std=c++17
 BUILD_DIR ?= build
 
 SRCS = src/Map.cpp src/Robot.cpp src/SimulationLogger.cpp src/TaskManager.cpp

@@ -50,15 +50,21 @@ public:
     
     // Balanced assignment considering makespan (good for concurrent execution)
     std::map<std::string, std::string> assignAllTasksBalanced();
-    
+
     // === Query Methods ===
     
     std::vector<Task> getPendingTasks() const;
     std::optional<Task> getTaskById(const std::string& taskId) const;
     void markTaskComplete(const std::string& taskId);
-    
+
     // Get current assignments
     const std::unordered_map<std::string, std::string>& getAssignments() const;
+
+    // Clear all assignments (for new simulation runs)
+    void clearAllAssignments();
+
+    // Helper: generate unique task ID (public for server use)
+    std::string generateTaskId();
 
 private:
     Map& mapRef;
@@ -95,12 +101,9 @@ private:
     
     // Cost function for pathfinding distance
     float pathfindingCost(const Robot& robot, const Task& task) const;
-    
+
     // Cost function considering robot speed (for makespan)
     float makespanCost(const Robot& robot, const Task& task) const;
-    
-    // Helper: generate unique task ID
-    std::string generateTaskId();
 };
 
 #endif
