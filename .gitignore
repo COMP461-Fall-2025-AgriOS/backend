@@ -30,3 +30,6 @@ Makefile
 # Python envs
 venv/
 .env
+
+# Test visualization artifacts
+tests/visualizations/*

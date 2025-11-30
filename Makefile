@@ -53,9 +53,12 @@ $(BUILD_DIR)_dir:
 
 clean:
 	@-rm -rf $(BUILD_DIR) $(TARGET)
+	@rm core.* > /dev/null 2>&1 || true
 	@for d in $(PLUGIN_EXAMPLES); do \
 		if [ -d "$$d" ]; then $(MAKE) -C $$d clean; fi; \
 	done
 
 test: build
-	@python3 tests/run_tests.py
+	@echo "Running unit/integration tests..."
+	@python3 tests/run_tests.py || ( echo "run_tests.py failed"; exit 1 )
+	@python3 tests/run_map_seg_test.py || ( echo "run_map_seg_test.py failed"; exit 1 )

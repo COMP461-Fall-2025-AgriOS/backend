@@ -11,7 +11,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 SERVER_BIN = os.path.join(ROOT, 'agrios_backend')
 SIM_LOG = os.path.join(ROOT, 'simulation.log')
 
-PORT = 9090
+PORT = 15000
 
 def wait_for_port(port, timeout=5.0):
     deadline = time.time() + timeout
@@ -53,6 +53,17 @@ def main():
             print("Build failed")
             sys.exit(1)
 
+    # build example plugin so it's available to the server
+    plugin_dir = os.path.join(ROOT, 'plugins', 'examples', 'watering')
+    if os.path.isdir(plugin_dir):
+        print('Building example plugin...')
+        try:
+            rc = subprocess.call(['make'], cwd=plugin_dir)
+            if rc != 0:
+                print('Plugin build failed (continuing)')
+        except Exception:
+            print('Plugin build error (continuing)')
+
     # ensure fresh simulation.log
     try:
         if os.path.exists(SIM_LOG):
@@ -63,7 +74,8 @@ def main():
     # start server
     env = os.environ.copy()
     # run with explicit port
-    proc = subprocess.Popen([SERVER_BIN, '--port', str(PORT)], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # start server and point it at the example plugin dir so it can load our test plugin
+    proc = subprocess.Popen([SERVER_BIN, '--port', str(PORT), '--plugins-dir', plugin_dir], cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     try:
         ok = wait_for_port(PORT, timeout=5.0)
@@ -76,7 +88,7 @@ def main():
         # create a map
         import uuid
         map_id = str(uuid.uuid4())
-        map_body = {'width': 10, 'height': 10}
+        map_body = {'width': 100, 'height': 100}
         resp = http_request('POST', f'/map/{map_id}', map_body)
         print('Create map response:')
         print(resp.split('\r\n\r\n',1)[1] if '\r\n\r\n' in resp else resp)
@@ -100,6 +112,16 @@ def main():
         print('Pathfind response:')
         print(resp.split('\r\n\r\n',1)[1] if '\r\n\r\n' in resp else resp)
 
+        # enable the example plugin (module id is the filename without .so)
+        resp = http_request('POST', '/enabled-plugins', ['libwatering_example'])
+        print('Enable plugin response:')
+        print(resp.split('\r\n\r\n',1)[1] if '\r\n\r\n' in resp else resp)
+
+        # invoke the plugin via the server endpoint to demonstrate the callback runs
+        resp = http_request('POST', f'/invoke/libwatering_example', {'robotId': robot_id})
+        print('Invoke plugin response:')
+        print(resp.split('\r\n\r\n',1)[1] if '\r\n\r\n' in resp else resp)
+
         # wait for simulation.log to be written
         deadline = time.time() + 5.0
         while time.time() < deadline:
@@ -121,7 +143,22 @@ def main():
             proc.terminate()
         except Exception:
             pass
-        proc.wait()
+        # collect any remaining stdout/stderr (plugin logs go to stderr)
+        try:
+            out, err = proc.communicate(timeout=2)
+        except Exception:
+            try:
+                proc.kill()
+                out, err = proc.communicate(timeout=1)
+            except Exception:
+                out, err = b'', b''
+
+        if err:
+            print('\n--- server stdout ---')
+            try:
+                print(err.decode('utf-8', errors='ignore'))
+            except Exception:
+                print(err)
 
 if __name__ == '__main__':
     main()

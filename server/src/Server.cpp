@@ -635,6 +635,114 @@ void Server::initializeHandlers() {
                 
                 if (logger) logger->log(LogLevel::Info, "Created map with id=" + id + ", name=" + name + ", width=" + std::to_string(width) + ", height=" + std::to_string(height) + ", mapUrl=" + mapUrl);
 
+                // If the mapUrl appears to be a local image file, attempt to run
+                // the segmentation script to populate the Map cells before routing.
+                try {
+                    // naive check for image extension
+                    std::string lowerUrl = mapUrl;
+                    std::transform(lowerUrl.begin(), lowerUrl.end(), lowerUrl.begin(), ::tolower);
+                    bool isImage = (lowerUrl.size() > 4 && (lowerUrl.substr(lowerUrl.size()-4) == ".jpg" || lowerUrl.substr(lowerUrl.size()-4) == ".png" || lowerUrl.substr(lowerUrl.size()-5) == ".jpeg"));
+                    if (isImage) {
+                        // Prepare local image path: if mapUrl is remote, download it first
+                        std::string localImgPath = mapUrl;
+                        bool downloaded = false;
+                        if (lowerUrl.rfind("http://", 0) == 0 || lowerUrl.rfind("https://", 0) == 0) {
+                            localImgPath = "/tmp/seg_img_" + id + ".img";
+                            const char* token = std::getenv("MAPBOX_ACCESS_TOKEN");
+                            std::ostringstream dl;
+                            dl << "curl -s -L -o \"" << localImgPath << "\" \"" << mapUrl << "\"";
+                            if (token && token[0] != '\0') {
+                                dl << " -H \"Authorization: Bearer " << token << "\"";
+                            }
+                            std::string dlcmd = dl.str();
+                            if (logger) logger->log(LogLevel::Info, "Downloading map image: " + dlcmd);
+                            int drc = std::system(dlcmd.c_str());
+                            if (drc != 0) {
+                                if (logger) logger->log(LogLevel::Warn, "Failed to download map image, curl rc=" + std::to_string(drc));
+                            } else {
+                                downloaded = true;
+                            }
+                        }
+
+                        // Check file exists (either original local path or downloaded)
+                        std::ifstream imgFile(localImgPath);
+                        if (imgFile.good()) {
+                            imgFile.close();
+                            std::string tmpJson = "/tmp/seg_map_" + id + ".json";
+                            // Build command to run the Python script. Use repo-relative path.
+                            std::ostringstream cmd;
+                            cmd << "python3 scripts/segment_and_export.py \"" << localImgPath << "\" \"/tmp/seg_out_" << id << ".hpp\" --format map_class --out-json \"" << tmpJson << "\" --grid " << std::to_string(width);
+                            std::string command = cmd.str();
+                            if (logger) logger->log(LogLevel::Info, "Running segmentation command: " + command);
+                            int rc = std::system(command.c_str());
+                            if (rc == 0) {
+                                // Read JSON and populate the map grid
+                                std::ifstream jf(tmpJson);
+                                if (jf) {
+                                    std::string content((std::istreambuf_iterator<char>(jf)), std::istreambuf_iterator<char>());
+                                    jf.close();
+                                    // Very small JSON parser: extract numbers sequentially
+                                    std::vector<int> nums;
+                                    std::string num;
+                                    for (size_t i = 0; i < content.size(); ++i) {
+                                        char c = content[i];
+                                        if ((c >= '0' && c <= '9')) {
+                                            num.push_back(c);
+                                        } else if (!num.empty()) {
+                                            nums.push_back(std::stoi(num));
+                                            num.clear();
+                                        }
+                                    }
+                                    if (!num.empty()) { nums.push_back(std::stoi(num)); num.clear(); }
+                                    // Expect at least width and height as first two numbers followed by grid entries
+                                    if (nums.size() >= 2) {
+                                        int jwidth = nums[0];
+                                        int jheight = nums[1];
+                                        size_t expect = 2 + (size_t)jwidth * (size_t)jheight;
+                                        if (nums.size() >= expect) {
+                                            Map &mref = maps.at(id);
+                                            size_t idx = 2;
+                                            for (int y = 0; y < jheight; ++y) {
+                                                for (int x = 0; x < jwidth; ++x) {
+                                                    int code = nums[idx++];
+                                                    // code: 1=FIELD,2=ROAD => accessible(0); else inaccessible(1)
+                                                    int cell = (code == 1 || code == 2) ? 0 : 1;
+                                                    // If generated grid resolution differs from Map width/height, scale accordingly
+                                                    if (jwidth == mref.getWidth() && jheight == mref.getHeight()) {
+                                                        mref.setCell(x, y, cell);
+                                                    } else {
+                                                        // Map and generated grid sizes differ: map cells are indexed by map's width/height
+                                                        int scaled_x = x * mref.getWidth() / jwidth;
+                                                        int scaled_y = y * mref.getHeight() / jheight;
+                                                        if (mref.isValidPosition(scaled_x, scaled_y)) {
+                                                            mref.setCell(scaled_x, scaled_y, cell);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            if (logger) logger->log(LogLevel::Info, "Populated map grid from segmentation for map id=" + id);
+                                        } else {
+                                            if (logger) logger->log(LogLevel::Warn, "Segmentation JSON smaller than expected for map id=" + id);
+                                        }
+                                    }
+                                } else {
+                                    if (logger) logger->log(LogLevel::Warn, "Failed to open segmentation JSON: " + tmpJson);
+                                }
+                                // cleanup tmp files
+                                std::remove(tmpJson.c_str());
+                                if (downloaded) std::remove(localImgPath.c_str());
+                            } else {
+                                if (logger) logger->log(LogLevel::Warn, "Segmentation script failed with rc=" + std::to_string(rc));
+                                if (downloaded) std::remove(localImgPath.c_str());
+                            }
+                        } else {
+                            if (logger) logger->log(LogLevel::Warn, "Map image file not found: " + localImgPath);
+                        }
+                    }
+                } catch (const std::exception &ex) {
+                    if (logger) logger->log(LogLevel::Error, std::string("Exception during segmentation: ") + ex.what());
+                }
+
                 return std::string("Map created successfully\n");
             } else {
                 return std::string("Failed to parse map data (missing required fields: width, height, name, mapUrl)\n");
@@ -770,6 +878,104 @@ void Server::initializeHandlers() {
                 if (logger) logger->log(LogLevel::Warn, "Pathfind: map not found id=" + mapId);
                 return std::string("Map not found\n");
             }
+
+            // If the map was created from an image but segmentation hasn't run
+            // (grid likely all zeros), attempt to run segmentation now to populate
+            // obstacles before pathfinding.
+            try {
+                Map &mref = mIt->second;
+                bool allZero = true;
+                for (int yy = 0; yy < mref.getHeight() && allZero; ++yy) {
+                    for (int xx = 0; xx < mref.getWidth(); ++xx) {
+                        if (mref.getCell(xx, yy) != 0) { allZero = false; break; }
+                    }
+                }
+                std::string mapUrlLocal = mref.getMapUrl();
+                std::string lowerUrl = mapUrlLocal;
+                std::transform(lowerUrl.begin(), lowerUrl.end(), lowerUrl.begin(), ::tolower);
+                bool isImage = (lowerUrl.size() > 4 && (lowerUrl.substr(lowerUrl.size()-4) == ".jpg" || lowerUrl.substr(lowerUrl.size()-4) == ".png" || lowerUrl.substr(lowerUrl.size()-5) == ".jpeg"));
+                if (allZero && isImage) {
+                    // Prepare local image path: download if remote
+                    std::string localImgPath = mapUrlLocal;
+                    bool downloaded = false;
+                    if (lowerUrl.rfind("http://", 0) == 0 || lowerUrl.rfind("https://", 0) == 0) {
+                        localImgPath = "/tmp/seg_img_" + mapId + ".img";
+                        const char* token = std::getenv("MAPBOX_ACCESS_TOKEN");
+                        std::ostringstream dl;
+                        dl << "curl -s -L -o \"" << localImgPath << "\" \"" << mapUrlLocal << "\"";
+                        if (token && token[0] != '\0') {
+                            dl << " -H \"Authorization: Bearer " << token << "\"";
+                        }
+                        std::string dlcmd = dl.str();
+                        if (logger) logger->log(LogLevel::Info, "Downloading map image before pathfind: " + dlcmd);
+                        int drc = std::system(dlcmd.c_str());
+                        if (drc != 0) {
+                            if (logger) logger->log(LogLevel::Warn, "Failed to download map image before pathfind, curl rc=" + std::to_string(drc));
+                        } else {
+                            downloaded = true;
+                        }
+                    }
+
+                    std::ifstream imgFile(localImgPath);
+                    if (imgFile.good()) {
+                        imgFile.close();
+                        std::string tmpJson = "/tmp/seg_map_" + mapId + ".json";
+                        std::ostringstream cmd;
+                        cmd << "python3 scripts/segment_and_export.py \"" << localImgPath << "\" \"/tmp/seg_out_" << mapId << ".hpp\" --format map_class --out-json \"" << tmpJson << "\" --grid " << std::to_string(mref.getWidth());
+                        std::string command = cmd.str();
+                        if (logger) logger->log(LogLevel::Info, "Running segmentation before pathfind: " + command);
+                        int rc = std::system(command.c_str());
+                        if (rc == 0) {
+                            std::ifstream jf(tmpJson);
+                            if (jf) {
+                                std::string content((std::istreambuf_iterator<char>(jf)), std::istreambuf_iterator<char>());
+                                jf.close();
+                                std::vector<int> nums;
+                                std::string num;
+                                for (size_t i = 0; i < content.size(); ++i) {
+                                    char c = content[i];
+                                    if ((c >= '0' && c <= '9')) {
+                                        num.push_back(c);
+                                    } else if (!num.empty()) {
+                                        nums.push_back(std::stoi(num));
+                                        num.clear();
+                                    }
+                                }
+                                if (!num.empty()) { nums.push_back(std::stoi(num)); num.clear(); }
+                                if (nums.size() >= 2) {
+                                    int jwidth = nums[0];
+                                    int jheight = nums[1];
+                                    size_t expect = 2 + (size_t)jwidth * (size_t)jheight;
+                                    if (nums.size() >= expect) {
+                                        size_t idx = 2;
+                                        for (int y = 0; y < jheight; ++y) {
+                                            for (int x = 0; x < jwidth; ++x) {
+                                                int code = nums[idx++];
+                                                int cell = (code == 1 || code == 2) ? 0 : 1;
+                                                if (jwidth == mref.getWidth() && jheight == mref.getHeight()) {
+                                                    mref.setCell(x, y, cell);
+                                                } else {
+                                                    int scaled_x = x * mref.getWidth() / jwidth;
+                                                    int scaled_y = y * mref.getHeight() / jheight;
+                                                    if (mref.isValidPosition(scaled_x, scaled_y)) {
+                                                        mref.setCell(scaled_x, scaled_y, cell);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if (logger) logger->log(LogLevel::Info, "Populated map grid from segmentation before pathfind for map id=" + mapId);
+                                    }
+                                }
+                            }
+                            std::remove(tmpJson.c_str());
+                            if (downloaded) std::remove(localImgPath.c_str());
+                        } else {
+                            if (logger) logger->log(LogLevel::Warn, "Segmentation script failed before pathfind with rc=" + std::to_string(rc));
+                            if (downloaded) std::remove(localImgPath.c_str());
+                        }
+                    }
+                }
+            } catch (...) {}
 
             std::regex tgtRe("\"target\"\\s*:\\s*\\[\\s*([0-9.+\-eE]+)\\s*,\\s*([0-9.+\-eE]+)\\s*\\]");
             std::smatch m3;
