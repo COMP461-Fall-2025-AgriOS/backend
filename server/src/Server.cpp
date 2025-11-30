@@ -743,7 +743,7 @@ void Server::initializeHandlers() {
                                         int jheight = nums[1];
                                         size_t expect = 2 + (size_t)jwidth * (size_t)jheight;
                                         if (nums.size() >= expect) {
-                                            Map &mref = maps.at(id);
+                                            Map &mref = *maps.at(id);
                                             size_t idx = 2;
                                             for (int y = 0; y < jheight; ++y) {
                                                 for (int x = 0; x < jwidth; ++x) {
@@ -929,7 +929,7 @@ void Server::initializeHandlers() {
             // (grid likely all zeros), attempt to run segmentation now to populate
             // obstacles before pathfinding.
             try {
-                Map &mref = mIt->second;
+                Map &mref = *mIt->second;
                 bool allZero = true;
                 for (int yy = 0; yy < mref.getHeight() && allZero; ++yy) {
                     for (int xx = 0; xx < mref.getWidth(); ++xx) {
