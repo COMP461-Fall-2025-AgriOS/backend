@@ -12,6 +12,9 @@ plugins/**/*.dylib
 *.o
 *.a
 
+# Core dumps
+*.core
+
 # Editor and OS files
 .vscode/
 *.swp
