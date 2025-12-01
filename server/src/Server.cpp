@@ -1333,13 +1333,49 @@ void Server::initializeHandlers() {
             }
             out << "]}";
         } else { // greedy (default)
-            int assignmentCount = 0;
-            while (true) {
-                auto robotId = tmIt->second->assignNextTaskNearestRobot();
-                if (!robotId.has_value()) break;
-                assignmentCount++;
+            // Multi-round greedy: assign tasks in rounds until all are done
+            // Track all assignments across rounds for output
+            std::map<std::string, std::string> allGreedyAssignments;
+            int totalAssigned = 0;
+            int maxRounds = 100; // Safety limit
+            int round = 0;
+            
+            while (!tmIt->second->getPendingTasks().empty() && round < maxRounds) {
+                round++;
+                int roundAssigned = 0;
+                
+                // Assign as many tasks as possible this round (up to number of robots)
+                while (true) {
+                    auto robotId = tmIt->second->assignNextTaskNearestRobot();
+                    if (!robotId.has_value()) break;
+                    roundAssigned++;
+                    totalAssigned++;
+                }
+                
+                if (roundAssigned == 0) break; // No progress, stop
+                
+                // Save this round's assignments
+                const auto& roundAssignmentsMap = tmIt->second->getAssignments();
+                for (const auto& [taskId, robotId] : roundAssignmentsMap) {
+                    allGreedyAssignments[taskId] = robotId;
+                }
+                
+                // If there are still pending tasks, clear assignment tracking
+                // so robots can be reused in the next round
+                // (Robot positions were already updated by pathfind to task targets)
+                if (!tmIt->second->getPendingTasks().empty()) {
+                    tmIt->second->clearAllAssignments();
+                }
             }
-            if (logger) logger->log(LogLevel::Info, "Greedy algorithm assigned " + std::to_string(assignmentCount) + " robots to tasks");
+            
+            if (logger) logger->log(LogLevel::Info, "Greedy algorithm assigned " + std::to_string(totalAssigned) + " tasks in " + std::to_string(round) + " rounds");
+            
+            // Output all assignments from all rounds
+            int idx = 0;
+            for (const auto& [taskId, robotId] : allGreedyAssignments) {
+                if (idx++ > 0) out << ",";
+                out << "{\"taskId\":\"" << taskId << "\",\"robotId\":\"" << robotId << "\"}";
+            }
             out << "]}";
         }
 
@@ -1405,61 +1441,61 @@ int Server::loadPluginsFromDirectory(const std::string& dirPath) {
     // Helper function to load plugins from a directory (non-recursive in this call)
     auto loadFromDir = [&](const std::string& path) -> int {
         DIR* dir = opendir(path.c_str());
-        if (!dir) {
+    if (!dir) {
             if (logger) logger->log(LogLevel::Warn, std::string("Failed to open plugins directory: ") + path);
-            return 0;
-        }
+        return 0;
+    }
 
         int count = 0;
-        struct dirent* ent;
-        while ((ent = readdir(dir)) != nullptr) {
-            std::string name = ent->d_name;
-            if (name.size() > 3 && name.substr(name.size()-3) == ".so") {
+    struct dirent* ent;
+    while ((ent = readdir(dir)) != nullptr) {
+        std::string name = ent->d_name;
+        if (name.size() > 3 && name.substr(name.size()-3) == ".so") {
                 std::string fullpath = path + "/" + name;
-                void* handle = dlopen(fullpath.c_str(), RTLD_NOW | RTLD_LOCAL);
-                if (!handle) {
-                    if (logger) logger->log(LogLevel::Error, std::string("dlopen failed for ") + fullpath + ": " + dlerror());
-                    continue;
-                }
-
-                using start_fn_t = int(*)(const HostAPI*, const char*);
-                using stop_fn_t = void(*)();
-
-                dlerror(); // clear
-                start_fn_t start = reinterpret_cast<start_fn_t>(dlsym(handle, "plugin_start"));
-                const char* dlsym_err = dlerror();
-                if (dlsym_err || !start) {
-                    if (logger) logger->log(LogLevel::Warn, std::string("plugin_start not found in ") + fullpath);
-                    dlclose(handle);
-                    continue;
-                }
-
-                stop_fn_t stop = reinterpret_cast<stop_fn_t>(dlsym(handle, "plugin_stop"));
-                // stop may be optional; still allow plugin to load
-
-                // Use file base name (without .so) as moduleId
-                std::string moduleId = name.substr(0, name.size()-3);
-
-                int rc = start(&hostApi, moduleId.c_str());
-                if (rc != 0) {
-                    if (logger) logger->log(LogLevel::Warn, std::string("plugin_start failed for ") + fullpath);
-                    if (stop) stop();
-                    dlclose(handle);
-                    continue;
-                }
-
-                PluginEntry entry;
-                entry.handle = handle;
-                entry.stopFn = stop;
-                entry.path = fullpath;
-                entry.moduleId = moduleId;
-                loadedPlugins.push_back(entry);
-                ++count;
-                if (logger) logger->log(LogLevel::Info, std::string("Loaded plugin: ") + fullpath + " as moduleId=" + moduleId);
+            void* handle = dlopen(fullpath.c_str(), RTLD_NOW | RTLD_LOCAL);
+            if (!handle) {
+                if (logger) logger->log(LogLevel::Error, std::string("dlopen failed for ") + fullpath + ": " + dlerror());
+                continue;
             }
-        }
 
-        closedir(dir);
+            using start_fn_t = int(*)(const HostAPI*, const char*);
+            using stop_fn_t = void(*)();
+
+            dlerror(); // clear
+            start_fn_t start = reinterpret_cast<start_fn_t>(dlsym(handle, "plugin_start"));
+            const char* dlsym_err = dlerror();
+            if (dlsym_err || !start) {
+                if (logger) logger->log(LogLevel::Warn, std::string("plugin_start not found in ") + fullpath);
+                dlclose(handle);
+                continue;
+            }
+
+            stop_fn_t stop = reinterpret_cast<stop_fn_t>(dlsym(handle, "plugin_stop"));
+            // stop may be optional; still allow plugin to load
+
+            // Use file base name (without .so) as moduleId
+            std::string moduleId = name.substr(0, name.size()-3);
+
+            int rc = start(&hostApi, moduleId.c_str());
+            if (rc != 0) {
+                if (logger) logger->log(LogLevel::Warn, std::string("plugin_start failed for ") + fullpath);
+                if (stop) stop();
+                dlclose(handle);
+                continue;
+            }
+
+            PluginEntry entry;
+            entry.handle = handle;
+            entry.stopFn = stop;
+            entry.path = fullpath;
+            entry.moduleId = moduleId;
+            loadedPlugins.push_back(entry);
+                ++count;
+            if (logger) logger->log(LogLevel::Info, std::string("Loaded plugin: ") + fullpath + " as moduleId=" + moduleId);
+        }
+    }
+
+    closedir(dir);
         return count;
     };
 
@@ -1850,7 +1886,7 @@ void Server::run() {
                 
                 // Parse Content-Length header
                 if (bodyStart > 0) {
-                    size_t clPos = request.find("Content-Length:");
+                size_t clPos = request.find("Content-Length:");
                     if (clPos != std::string::npos && clPos < bodyStart) {
                         size_t clValueStart = clPos + 15; // Skip "Content-Length:"
                         // Skip whitespace
@@ -1859,7 +1895,7 @@ void Server::run() {
                         }
                         size_t clEnd = request.find("\r\n", clValueStart);
                         if (clEnd == std::string::npos) clEnd = request.find("\n", clValueStart);
-                        if (clEnd != std::string::npos) {
+                    if (clEnd != std::string::npos) {
                             std::string clStr = request.substr(clValueStart, clEnd - clValueStart);
                             contentLength = std::atoi(clStr.c_str());
                         }
@@ -1869,8 +1905,8 @@ void Server::run() {
             
             // Check if we've read the complete body
             if (contentLength >= 0 && bodyStart > 0) {
-                int currentBodySize = request.size() - bodyStart;
-                if (currentBodySize >= contentLength) {
+                            int currentBodySize = request.size() - bodyStart;
+                            if (currentBodySize >= contentLength) {
                     break; // Got full body based on Content-Length
                 }
             } else if (bodyStart > 0 && contentLength < 0) {
@@ -1898,16 +1934,16 @@ void Server::run() {
                             std::string closingBoundary = "--" + boundaryValue + "--";
                             if (request.find(closingBoundary, bodyStart) != std::string::npos) {
                                 break; // Got full multipart body
-                            }
                         }
-                    } else {
-                        // Not multipart, assume complete if we have headers
-                        break;
                     }
+                } else {
+                        // Not multipart, assume complete if we have headers
+                    break;
+                }
                 } else {
                     // No Content-Type, assume complete
                     break;
-                }
+            }
             }
             
             std::memset(buffer, 0, sizeof(buffer));
