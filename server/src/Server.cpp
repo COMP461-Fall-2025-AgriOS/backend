@@ -681,10 +681,17 @@ void Server::initializeHandlers() {
                 // If the mapUrl appears to be a local image file, attempt to run
                 // the segmentation script to populate the Map cells before routing.
                 try {
-                    // naive check for image extension
+                    // Check for image extension in URL path (before query string) or mapbox static API
                     std::string lowerUrl = mapUrl;
                     std::transform(lowerUrl.begin(), lowerUrl.end(), lowerUrl.begin(), ::tolower);
-                    bool isImage = (lowerUrl.size() > 4 && (lowerUrl.substr(lowerUrl.size()-4) == ".jpg" || lowerUrl.substr(lowerUrl.size()-4) == ".png" || lowerUrl.substr(lowerUrl.size()-5) == ".jpeg"));
+                    std::string urlPath = lowerUrl;
+                    size_t qpos = urlPath.find('?');
+                    if (qpos != std::string::npos) urlPath = urlPath.substr(0, qpos);
+                    bool isImage = (urlPath.size() > 4 && (urlPath.substr(urlPath.size()-4) == ".jpg" || urlPath.substr(urlPath.size()-4) == ".png" || urlPath.substr(urlPath.size()-5) == ".jpeg"));
+                    // Also treat mapbox static image URLs as images (they return PNG/JPEG)
+                    if (!isImage && lowerUrl.find("api.mapbox.com") != std::string::npos && lowerUrl.find("/static/") != std::string::npos) {
+                        isImage = true;
+                    }
                     if (isImage) {
                         // Prepare local image path: if mapUrl is remote, download it first
                         std::string localImgPath = mapUrl;
@@ -841,6 +848,43 @@ void Server::initializeHandlers() {
         if (logger) logger->log(LogLevel::Warn, "Get map not found");
         return std::string("Map not found\n"); });
 
+    // GET /map/{id}/grid - Returns the occupancy grid for a map
+    registerEndpoint("GET /map/{id}/grid", [this](const std::string &request)
+                     {
+        std::istringstream requestStream(request);
+        std::string method, path;
+        requestStream >> method >> path;
+
+        std::regex idRegex("/map/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/grid");
+        std::smatch match;
+        if (std::regex_search(path, match, idRegex)) {
+            std::string id = match[1];
+            auto it = maps.find(id);
+            if (it != maps.end()) {
+                const Map &m = *(it->second);
+                int width = m.getWidth();
+                int height = m.getHeight();
+                
+                std::ostringstream out;
+                out << "{\"width\":" << width << ",\"height\":" << height << ",\"grid\":[";
+                for (int y = 0; y < height; ++y) {
+                    out << "[";
+                    for (int x = 0; x < width; ++x) {
+                        out << m.getCell(x, y);
+                        if (x < width - 1) out << ",";
+                    }
+                    out << "]";
+                    if (y < height - 1) out << ",";
+                }
+                out << "]}";
+                
+                if (logger) logger->log(LogLevel::Info, "Fetched grid for map id=" + id);
+                return out.str();
+            }
+        }
+        if (logger) logger->log(LogLevel::Warn, "Get map grid not found");
+        return std::string("Map not found\n"); });
+
     registerEndpoint("GET /map/", [this](const std::string &request)
                      {
         std::ostringstream response;
@@ -929,7 +973,7 @@ void Server::initializeHandlers() {
             // (grid likely all zeros), attempt to run segmentation now to populate
             // obstacles before pathfinding.
             try {
-                Map &mref = *mIt->second;
+                Map &mref = *(mIt->second);
                 bool allZero = true;
                 for (int yy = 0; yy < mref.getHeight() && allZero; ++yy) {
                     for (int xx = 0; xx < mref.getWidth(); ++xx) {
@@ -939,7 +983,15 @@ void Server::initializeHandlers() {
                 std::string mapUrlLocal = mref.getMapUrl();
                 std::string lowerUrl = mapUrlLocal;
                 std::transform(lowerUrl.begin(), lowerUrl.end(), lowerUrl.begin(), ::tolower);
-                bool isImage = (lowerUrl.size() > 4 && (lowerUrl.substr(lowerUrl.size()-4) == ".jpg" || lowerUrl.substr(lowerUrl.size()-4) == ".png" || lowerUrl.substr(lowerUrl.size()-5) == ".jpeg"));
+                // Check for image extension in URL path (before query string) or mapbox static API pattern
+                std::string urlPath = lowerUrl;
+                size_t qpos = urlPath.find('?');
+                if (qpos != std::string::npos) urlPath = urlPath.substr(0, qpos);
+                bool isImage = (urlPath.size() > 4 && (urlPath.substr(urlPath.size()-4) == ".jpg" || urlPath.substr(urlPath.size()-4) == ".png" || urlPath.substr(urlPath.size()-5) == ".jpeg"));
+                // Also treat mapbox static image URLs as images (they return PNG/JPEG)
+                if (!isImage && lowerUrl.find("api.mapbox.com") != std::string::npos && lowerUrl.find("/static/") != std::string::npos) {
+                    isImage = true;
+                }
                 if (allZero && isImage) {
                     // Prepare local image path: download if remote
                     std::string localImgPath = mapUrlLocal;

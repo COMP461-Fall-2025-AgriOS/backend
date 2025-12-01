@@ -80,26 +80,43 @@ def classify_clusters(centers):
         minc = min(r, g, b)
         saturation = 0 if maxc == 0 else (maxc - minc) / maxc
         
-        # Earth tone detection for brown fields
-        # Brown typically has R > G > B and moderate values
-        is_earth_tone = (r > g and g > b and 
-                        brightness > 0.2 and brightness < 0.7 and
-                        saturation > 0.1 and saturation < 0.6)
+        # Dark water/shadows: very dark
+        is_dark_water = (brightness < 0.15)
         
-        # Vegetation index (simplified NDVI-like)
-        vegetation_index = (g - r) / (g + r + 1e-8) if (g + r) > 0 else -1
+        # Bright buildings/concrete: very bright, low saturation
+        is_bright_obstacle = (brightness > 0.75 and saturation < 0.15)
         
-        is_green_vegetation = (vegetation_index > 0.1 and saturation > 0.2)
-        is_brown_vegetation = (is_earth_tone and abs(r - g) < 0.3)  # brown fields
+        # Tan/beige rivers or roads: moderate brightness, LOW saturation
+        # These stand out from green/brown vegetation which has higher saturation
+        is_tan_feature = (
+            brightness > 0.45 and brightness < 0.75 and
+            saturation < 0.18  # Low saturation = not vegetation
+        )
         
-        if is_green_vegetation or is_brown_vegetation:
-            cls = 'FIELD'
-        elif saturation < 0.2 and brightness > 0.4 and brightness < 0.8:
-            cls = 'ROAD'
-        elif brightness > 0.7 and saturation < 0.45:
-            cls = 'BUILDING'
+        # Green vegetation - high green, good saturation
+        is_green_field = (
+            g >= r and g >= b and
+            saturation > 0.25 and
+            brightness > 0.15
+        )
+        
+        # Brown farmland - warm tones with saturation
+        is_brown_field = (
+            r >= b and
+            saturation > 0.20 and saturation < 0.60 and
+            brightness > 0.20 and brightness < 0.55
+        )
+        
+        if is_dark_water:
+            cls = 'BUILDING'  # Dark water = obstacle
+        elif is_bright_obstacle:
+            cls = 'BUILDING'  # Buildings = obstacle
+        elif is_tan_feature:
+            cls = 'BUILDING'  # Tan rivers/roads = obstacle
+        elif is_green_field or is_brown_field:
+            cls = 'FIELD'  # Vegetation = accessible
         else:
-            cls = 'OTHER'
+            cls = 'FIELD'  # Default to accessible
         mapping[i] = cls
     return mapping
 
@@ -131,7 +148,7 @@ def polygons_from_mask(mask, min_area=100):
     return polys
 
 
-def build_occupancy_grid(labels, class_map, grid_width):
+def build_occupancy_grid(labels, class_map, grid_width, img=None):
     # Map classes to small integer codes
     # 0 = UNKNOWN, 1 = FIELD, 2 = ROAD, 3 = OBSTACLE
     h, w = labels.shape
@@ -141,6 +158,7 @@ def build_occupancy_grid(labels, class_map, grid_width):
     grid = np.zeros((grid_h, grid_width), dtype=np.uint8)
     # create mapping from class name to code
     class_to_code = {'FIELD':1, 'ROAD':2, 'BUILDING':3, 'OTHER':3}
+    
     for gy in range(grid_h):
         for gx in range(grid_width):
             # map to image coords
@@ -149,6 +167,7 @@ def build_occupancy_grid(labels, class_map, grid_width):
             lbl = labels[iy, ix]
             clsname = class_map.get(lbl, 'OTHER')
             grid[gy, gx] = class_to_code.get(clsname, 0)
+    
     return grid
 
 

@@ -429,9 +429,10 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
     dist[indexOf(sx, sy)] = 0;
     pq.push({0, sx, sy});
 
-    // 4 directional movement, 1 cost per step
-    const int dx[4] = {1, -1, 0, 0};
-    const int dy[4] = {0, 0, 1, -1};
+    // 8 directional movement (including diagonals)
+    const int dx[8] = {1, -1, 0, 0, 1, 1, -1, -1};
+    const int dy[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+    const int cost[8] = {10, 10, 10, 10, 14, 14, 14, 14}; // 10 for cardinal, 14 for diagonal (approx sqrt(2)*10)
 
     while (!pq.empty())
     {
@@ -449,7 +450,7 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
         int curIdx2 = indexOf(cur.x, cur.y);
         if (cur.cost != dist[curIdx2]) continue; // stale
 
-        for (int dir = 0; dir < 4; ++dir)
+        for (int dir = 0; dir < 8; ++dir)
         {
             int nx = cur.x + dx[dir];
             int ny = cur.y + dy[dir];
@@ -457,7 +458,7 @@ void Robot::pathfind(const Map& map, const std::vector<float>& target)
             if (!map.isAccessible(nx, ny)) continue;
 
             int nIdx = indexOf(nx, ny);
-            int nCost = cur.cost + 1;
+            int nCost = cur.cost + cost[dir];
             if (nCost < dist[nIdx])
             {
                 dist[nIdx] = nCost;
